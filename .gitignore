@@ -11,6 +11,9 @@ __pycache__/
 # Ollama models (about 9.3 GB)
 models/
 
+# Downloaded Who&When runs, about 4 MB (data/splits/ and data/human_review/ are pushed)
+data/who_and_when/
+
 # Pipeline run logs
 runs/
 

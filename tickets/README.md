@@ -21,8 +21,10 @@ setup/
   stop_ollama_server.py         stops only that server                                                          01 ✓
 tests/                          tests in pipeline order
   test_1_settings.py            the setup                                                                       01 ✓
-data.py                         one loader per dataset, all returning the same Trajectory      exists empty;    02
-run.py                          runs one scenario; --check is a quick check that logs nothing  exists empty;    02, 04
+  test_2_data.py                the data                                                                        02 ✓
+data.py                         download Who&When, remove bad runs, print a run, splits, human review set       02 ✓
+data_analysis.ipynb             data analysis for the midterm report (runs on Kaggle or the Mac)                02 ✓
+run.py                          runs the pilot and later runs                                  exists empty;    04
 models.py                       call(): the only way to ask a model; counts calls and tokens                    03
 score.py                        compares a predicted step with the Decisive step                                04
 run_log.py                      writes each run to runs/<scenario>/<start time>/                                04
@@ -37,6 +39,12 @@ Not in git (created on your machine):
 .venv/                          the project's Python 3.12                                                        01 ✓
 .cache/pip/                     pip's download cache                                                            01 ✓
 models/                         the Ollama models (about 9.2 GB)                                                01 ✓
+data/who_and_when/              the 58 downloaded runs (about 4 MB)                                             02 ✓
+
+In git, created by a script:
+data/splits/                    pilot.json (1 run) and test.json (all runs)                                     02
+data/human_review/              5 unlabelled runs for a person to fill in (run_<number>.md)                     02
+figures/                        PNG figures written by data_analysis.ipynb                                      02
 runs/                           run logs                                                                        04
 ```
 
@@ -47,7 +55,7 @@ Setup steps for a fresh clone are in the main [README](../README.md).
 | # | Ticket | Tag | Blocked by |
 |---|---|---|---|
 | 01 | [Environment inside the repo](01-environment-inside-the-repo.md) ✅ | build | none |
-| 02 | [Load Who&When and read it](02-load-who-and-when.md) | build | 01 |
+| 02 | [Load Who&When and read it](02-load-who-and-when.md) 🟡 (first split, review set and team reading left) | build | 01 |
 | 03 | [Count every model call](03-count-every-model-call.md) | build | 01 |
 | 04 | [Prover-estimator debate end to end](04-prover-estimator-debate-end-to-end.md) | build | 02, 03 |
 | 05 | [Review the first version](05-review-the-first-version.md) | think | 04 |
