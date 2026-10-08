@@ -1,2 +1,4 @@
-# Each ticket adds only the packages it uses.
-pytest==9.1.1
+# Python libraries for this project. Each ticket adds only the libraries it uses.
+
+# Ticket 01: environment inside the repo
+pytest==9.1.1    # runs the tests

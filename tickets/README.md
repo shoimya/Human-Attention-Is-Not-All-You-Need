@@ -12,25 +12,35 @@ Every step from an empty repo to final figures, extensions included. Work that d
 
 ## Folder structure
 
-Files appear only when a ticket needs them.
+Built for VS Code on a Mac: every file runs with the play button. Files appear only when a ticket needs them; the right column says which ticket adds or fills each one.
 
 ```
-settings.py      all settings and scenarios; loaded on one visible line
-data.py          one loader per dataset, all returning the same Trajectory
-models.py        call(): the only way to ask a model; counts calls and tokens
-score.py         compares a predicted step with the Decisive step
-run_log.py       writes each run to runs/<scenario>/<start time>/
-run.py           runs one scenario; --check is a quick check that logs nothing
-methods/         one file per method, all with the same shape
-  prover_estimator_debate.py
-  standard_debate.py
-  all_at_once.py
-  binary_search.py
-  single_critique.py
-setup/           one-time setup scripts
-tests/           tests in pipeline order
-runs/            run logs (not in git)
+settings.py                     project settings + setup (folders, models, port; builds .venv, downloads models)  01 ✓
+setup/
+  start_ollama_server.py        starts this project's Ollama server (port 11500, models from models/)            01 ✓
+  stop_ollama_server.py         stops only that server                                                          01 ✓
+tests/                          tests in pipeline order
+  test_1_settings.py            the setup                                                                       01 ✓
+data.py                         one loader per dataset, all returning the same Trajectory      exists empty;    02
+run.py                          runs one scenario; --check is a quick check that logs nothing  exists empty;    02, 04
+models.py                       call(): the only way to ask a model; counts calls and tokens                    03
+score.py                        compares a predicted step with the Decisive step                                04
+run_log.py                      writes each run to runs/<scenario>/<start time>/                                04
+methods/                        one file per method, all with the same shape
+  prover_estimator_debate.py                                                                                    04
+  standard_debate.py                                                                                            06
+  all_at_once.py                                                                                                07
+  binary_search.py                                                                                              08
+  single_critique.py                                                                                            08
+
+Not in git (created on your machine):
+.venv/                          the project's Python 3.12                                                        01 ✓
+.cache/pip/                     pip's download cache                                                            01 ✓
+models/                         the Ollama models (about 9.2 GB)                                                01 ✓
+runs/                           run logs                                                                        04
 ```
+
+Setup steps for a fresh clone are in the main [README](../README.md).
 
 ## Tickets
 

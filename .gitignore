@@ -8,6 +8,9 @@ proposal.md
 __pycache__/
 .pytest_cache/
 
+# Ollama models (about 9.3 GB)
+models/
+
 # Pipeline run logs
 runs/
 

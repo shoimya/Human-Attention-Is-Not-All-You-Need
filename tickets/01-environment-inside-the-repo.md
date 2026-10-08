@@ -4,47 +4,70 @@
 **Blocked by:** None (can start immediately)
 **Status:** done
 
-**What to build:** One setup step that makes this project run entirely from the SSD and independently of any other project. The Python environment, the package caches and the Ollama models all live inside the repo. This project starts its own Ollama server, on its own port, with its own models folder, and pulls the debater (Qwen3.5-9B) and judge (Qwen3.5-2B) models into it. A matching script stops that server. Settings live in one settings file, with defaults that work, and load on one visible line.
+**What to build:** A setup that makes this project run entirely from its own folder and independently of any other project, built for VS Code on a Mac. The Python environment, the package cache and the Ollama models all live inside the project folder, wherever it was cloned. This project runs its own Ollama server, on its own port, reading models only from the project's `models/` folder. Every file runs with the play button.
 
-- [x] One setup script starts this project's Ollama server and pulls both models into the repo; the owner's other project is unaffected.
-- [x] One setup script stops only this project's Ollama server.
+- [x] Pressing play on `settings.py` creates the project folders and files and the Python environment, and installs the requirements, skipping anything that already exists.
+- [x] One function downloads the debater (`qwen3.5:9b`) and judge (`qwen3.5:2b`) models into `models/`, skipping models already there.
+- [x] One script starts this project's Ollama server; one script stops only that server.
 - [x] Settings demo prints the active settings (models, port, folders).
-- [x] Nothing new is written to the home folder (no `~/.ollama/models`, no new Hugging Face or pip cache there).
-- [x] `.gitignore` also covers the environment, the caches and `runs/`; README explains setup in a few steps.
-- [x] Follows the code standards in `CLAUDE.md`: test written first, every new file runs on its own with a demo.
+- [x] No models in the home folder (`~/.ollama/models` does not exist); pip's cache is inside the project.
+- [x] `.gitignore` covers the environment, the caches, the models and `runs/`; README explains setup step by step.
+- [x] Tests confirm the setup (written after the code, at the owner's request).
 
 ## Outcome
 
-Done 2026-10-08.
+Rebuilt from scratch 2026-10-08, step by step with the owner, after the first version was deleted.
 
-**Files added**
-- `settings.py`: all settings, loaded with `settings = load_settings()`. The demo prints one setting per line.
-  - Folders, all inside the repo: `.cache/pip`, `.cache/huggingface`, `.cache/ollama-models`, `runs/`.
-  - Ollama port 11500 (Ollama's default 11434 stays free for other projects).
-  - Debater `qwen3.5:9b`, judge `qwen3.5:2b`.
-  - Loading the settings sets `HF_HOME`, so Hugging Face downloads go into the repo.
-- `setup/start_model_server.py`: starts this project's own `ollama serve` (models in the repo, port 11500) if it is not already running, then downloads only missing models. Safe to rerun. Server messages go to `.cache/ollama-server.log`.
-- `setup/stop_model_server.py`: stops only the server listening on port 11500, waits until it no longer answers, and says "Nothing to stop" if it is not running. It reuses the start script's check for whether the server is running.
-- `tests/test_1_environment.py`: 4 tests, built red → green one at a time:
-  1. every storage folder is inside the repo
-  2. the Ollama port is not 11434
-  3. loading the settings points `HF_HOME` into the repo
-  4. the server environment keeps models in the repo and listens on 127.0.0.1:11500
+**Project folder now**
+```
+settings.py                    setup functions + project settings (built for VS Code on a Mac)
+setup/start_ollama_server.py   starts this project's Ollama server
+setup/stop_ollama_server.py    stops it
+tests/test_1_settings.py       10 tests for the setup
+data.py, run.py                empty, filled by later tickets
+requirements.txt               pytest==9.1.1
+README.md, .gitignore, tickets/
+.venv/        Python 3.12.14 (about 30 MB)          not in git
+.cache/pip/   pip's download cache (a few MB)        not in git
+models/       qwen3.5:9b 6.6 GB + qwen3.5:2b 2.7 GB   not in git
+```
 
-  They run on their own or through `pytest`, and write nothing to `runs/`.
-- `requirements.txt`: `pytest==9.1.1` only.
-- `README.md`: setup in three commands, how to stop the server, and the `ollama pull` gotcha.
-- `.gitignore`: `CLAUDE.md`, `proposal.md`, `.venv/`, `.cache/`, `runs/`, `__pycache__/`, `.pytest_cache/`, `.DS_Store`.
+**`settings.py`**
+- Settings at the top: `MODELS_FOLDER` (`models/`), `OLLAMA_PORT` (11500), `OLLAMA_ADDRESS`, `DEBATER_MODEL` (`qwen3.5:9b`), `JUDGE_MODEL` (`qwen3.5:2b`), and the setup paths. All paths are worked out from where `settings.py` is, so they work in any clone.
+- `create_project_structure()`: creates `setup/`, `tests/`, and empty `data.py` and `run.py`; never empties an existing file.
+- `install_ticket_one_requirements()`: finds Python 3.12 by itself (so any Python can press play), builds `.venv/`, installs `requirements.txt` with pip's cache in `.cache/pip/`, and checks that Ollama is installed (it never installs it).
+- `print_next_step()`: reminds you to select the `.venv` interpreter in VS Code once.
+- `model_is_downloaded()`: checks on disk for Ollama's index file of a model, with no server needed.
+- `ollama_environment()`: tells Ollama to use `models/` and port 11500.
+- `download_models()`: downloads only missing models, through a temporary server it starts and stops itself. It does not run on play; you add it to the main block yourself.
+- `print_settings()`: the settings demo.
+- The main block runs the setup, prints how to start and stop the server for experiments, then prints the settings.
+
+**`setup/start_ollama_server.py`**: starts `ollama serve` in the background with `models/` and port 11500, unless already running; waits until it answers; reports whether both models are there. Server messages go to `models/ollama-server.log`.
+
+**`setup/stop_ollama_server.py`**: stops only whatever listens on port 11500 and waits until it has stopped; says "Nothing to stop" if nothing is running.
+
+**`tests/test_1_settings.py`** (10 tests, all passing, about 1 second, nothing written to `runs/`):
+1. storage folders inside the project
+2. port not 11434
+3. Ollama told to use `models/` and 127.0.0.1:11500
+4. project folders and files exist
+5. environment is Python 3.12
+6. Ollama installed
+7. both models downloaded
+8. a never-downloaded model reported missing
+9. `models/` and `.venv/` in `.gitignore`
+10. start → server lists both models → stop → port free (skipped if the server is already running, so a test never stops a server you are using)
 
 **Checks run**
-- Venv: Python 3.12.14 in `.venv/` (26 MB); pip cache in `.cache/pip/`.
-- Models: `qwen3.5:9b` (6.6 GB) and `qwen3.5:2b` (2.7 GB), 8.6 GB in total in `.cache/ollama-models/`, listed by `OLLAMA_HOST=127.0.0.1:11500 ollama list`.
-- Home folder: `~/.ollama` has no `models` folder; no new pip or Hugging Face files.
-- Rerunning the start script downloads nothing ("already installed").
-- Stop script: stop → port 11500 free; stop again → "Nothing to stop"; start → listening; stop → free. Port 11434 was not in use during the check; the script only targets port 11500 by design.
-- The server is left **stopped**. Start it with the start script before working.
+- Download: both models into `models/` (9.2 GB); temporary server stopped afterwards; no `~/.ollama/models`.
+- Start and stop: stop with nothing running → "Nothing to stop"; start → listening, both models listed; start again → "already running"; stop → port free.
+- `git status` shows nothing from `models/`, `.venv/` or `.cache/`.
 
 **Gotchas**
-- A plain `ollama pull` goes to the default server on port 11434, so the model would land outside this repo. Use the start script, or put `OLLAMA_HOST=127.0.0.1:11500` in front of `ollama` commands.
-- Models load into memory only when called, and Ollama unloads them after about 5 minutes without use. The server itself keeps running until the stop script stops it.
-- VS Code must use the `.venv` interpreter (Python: Select Interpreter → `.venv`) for Debug to find the installed packages.
+- A plain `ollama pull` talks to the default server on port 11434, so the model lands outside the project. Add models in `settings.py`, or put `OLLAMA_HOST=127.0.0.1:11500` in front of `ollama` commands.
+- Ollama writes `~/.ollama/cache/model-recommendations.json` (about 2 KB, no model data) each time a server starts, whatever `OLLAMA_MODELS` says. It cannot be prevented from our side.
+- VS Code must use the `.venv` interpreter for files that need the project's libraries (`print_next_step()` explains how).
+- Ollama unloads a model from memory after about 5 minutes without use; the server keeps running until the stop script stops it.
+
+**Moved to ticket 02 (owner's decision, 2026-10-08):** pointing the Hugging Face cache into the project. Nothing in this ticket downloads from Hugging Face; the first download is ticket 02's dataset, so it belongs there.
