@@ -1,0 +1,2 @@
+# Each ticket adds only the packages it uses.
+pytest==9.1.1

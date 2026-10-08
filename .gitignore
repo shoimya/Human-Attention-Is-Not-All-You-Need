@@ -1,0 +1,15 @@
+# Local files that stay on the owner's machine
+CLAUDE.md
+proposal.md
+
+# Python environment, downloads and models (all inside the repo, never pushed)
+.venv/
+.cache/
+__pycache__/
+.pytest_cache/
+
+# Pipeline run logs
+runs/
+
+# macOS folder files
+.DS_Store
