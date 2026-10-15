@@ -46,6 +46,7 @@ def test_ollama_keeps_its_models_in_the_project_and_uses_this_projects_port():
 
 def test_project_folders_and_files_exist():
     """The setup creates these folders and files; the start and stop scripts must be in setup/."""
+    # Here we list everything ticket 01 promises to create, then check each one is on disk.
     expected_paths = [
         PROJECT_FOLDER / "setup",
         PROJECT_FOLDER / "tests",

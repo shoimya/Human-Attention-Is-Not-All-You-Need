@@ -1,7 +1,9 @@
 """Stop this project's own Ollama server.
 
-Press play on this file when you have finished running experiments. Only the server on this
-project's port (see settings.py) is stopped; any other Ollama server on this computer keeps running.
+Press play on this file when you have finished running experiments with a server you started yourself.
+Only the server on this project's port (see settings.py) is stopped; any other Ollama server on this
+computer keeps running. run.py and download_models() also use stop_ollama_server(), but only to stop
+a server they started themselves.
 """
 
 import os
@@ -51,4 +53,5 @@ def stop_ollama_server() -> None:
 
 
 if __name__ == "__main__":
+    # Here we stop this project's server, or say there is nothing to stop.
     stop_ollama_server()

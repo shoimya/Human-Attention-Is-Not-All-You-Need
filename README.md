@@ -2,7 +2,7 @@
 
 When an AI agent fails a long task, a person has to read the whole run to find the step that caused the failure. This project tests whether a **prover-estimator debate** between two AI models can find that step, so the person checks one step instead of the whole run.
 
-The tasks are in [tickets/](tickets/README.md).
+The tasks are in [tickets/](tickets/README.md). How each method (the debates and the baselines) works, and the rules for building it, are in [informatics.md](informatics.md).
 
 ## Before you start
 
@@ -40,6 +40,7 @@ Two small exceptions, written by the programs themselves, outside this folder:
 | `setup/start_ollama_server.py`, `setup/stop_ollama_server.py` | Start and stop this project's own Ollama server |
 | `data.py` | Downloads the data, prints a run, and makes the splits and the human review set |
 | `data_analysis.ipynb` | The data analysis for the midterm report (run it on Kaggle) |
+| `informatics.md` | How each of the five methods works (prover-estimator debate, standard debate, one-shot, single critique, binary search), how we differ from the prover-estimator debate paper, and the rules for building each method |
 | `data/splits/pilot.json`, `data/splits/test.json` | The team's split: **pilot = run 36**, test = all 58 runs |
 | `data/human_review/run_*.md` | The team's 5 runs without labels (runs 2, 35, 45, 47, 50), to fill in by hand |
 | `tests/` | Tests for the setup and the data; press play on a test file to run it |
@@ -88,9 +89,14 @@ Each `data/human_review/run_<number>.md` shows one run without its label. Note t
 
 ## Every time you run experiments
 
-1. Press play on **`setup/start_ollama_server.py`**. It starts this project's own Ollama server in the background and confirms both models are there.
-2. Run your experiments.
+Press play on **`run.py`**. If this project's Ollama server is not running, `run.py` starts it, does its work and stops it again. If the server is already running, `run.py` uses it and leaves it running.
+
+To keep the server running across many runs (faster, because the models stay loaded):
+1. Press play on **`setup/start_ollama_server.py`**.
+2. Run your experiments as often as you like.
 3. When you have finished, press play on **`setup/stop_ollama_server.py`**.
+
+**Expect long runs on a Mac.** The models may read up to 65,536 tokens per call (`OLLAMA_CONTEXT_WINDOW` in `settings.py`). One call on the pilot run (run 36, about 35,000 tokens) takes about 4 minutes on an M4 with 16 GB. If a prompt ever fills that window, the log marks that call **PROMPT MAY HAVE BEEN CUT**.
 
 This project's server uses **port 11500** and reads models only from `models/`. It is separate from the Ollama app and from any other project's Ollama server (those use the default port 11434), so they never mix.
 

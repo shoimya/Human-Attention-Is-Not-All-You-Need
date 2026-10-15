@@ -9,8 +9,8 @@ How to use it:
        Cmd+Shift+P -> "Python: Select Interpreter" -> choose .venv
        (if .venv is not listed, choose "Enter interpreter path..." and type .venv/bin/python).
        From then on, the play button runs every file with the project's Python and its libraries.
-    3. To download the models (about 9.3 GB, into models/ inside this project), add download_models()
-       to the bottom of this file, under `if __name__ == "__main__":`, and press play.
+    3. To download the models (about 9.2 GB, into models/ inside this project), remove the # in front of
+       download_models() at the bottom of this file and press play.
 
 It is safe to run again: anything that already exists is left as it is and not downloaded again.
 """
@@ -18,8 +18,7 @@ It is safe to run again: anything that already exists is left as it is and not d
 import os
 import shutil
 import subprocess
-import time
-import urllib.request
+import sys
 from pathlib import Path
 
 # Here we find the repo folder: the folder that holds this file.
@@ -44,6 +43,12 @@ OLLAMA_ADDRESS = f"http://127.0.0.1:{OLLAMA_PORT}"
 # Here we name the models with Ollama's own names. The judge is smaller than the debaters on purpose.
 DEBATER_MODEL = "qwen3.5:9b"
 JUDGE_MODEL = "qwen3.5:2b"
+
+# Here we set how many tokens a model may read in one call (its context window). Ollama's default is about 2,000
+# and it silently drops the rest of a longer prompt. 65,536 fits 57 of the 58 runs, including the pilot
+# (run 36, about 35,000 tokens), and fits in a 16 GB Mac's memory (measured 2026-10-08: about 7.9 GB, 4 minutes
+# per call on the full pilot run). The longest run (about 87,000 tokens) needs a larger window, on Kaggle.
+OLLAMA_CONTEXT_WINDOW = 65536
 
 
 def create_project_structure() -> None:
@@ -95,6 +100,7 @@ def install_ticket_one_requirements() -> None:
 
 def print_next_step() -> None:
     """Remind the owner to point VS Code at the project's Python, so the play button uses it for every file."""
+    # Here we print the one step VS Code needs from the user, because this file cannot do it.
     print()
     print("Next step (once): point VS Code at the project's Python.")
     print('    Cmd+Shift+P -> "Python: Select Interpreter" -> choose .venv')
@@ -111,6 +117,7 @@ def model_is_downloaded(model_name: str) -> bool:
 
 def ollama_environment() -> dict:
     """Return the settings Ollama needs to keep its models in models/ and use this project's port."""
+    # Here we start from a copy of this computer's current settings, so Ollama still finds everything else it needs.
     environment = dict(os.environ)
     # Here we tell Ollama to read and save models in this project's models/ folder.
     environment["OLLAMA_MODELS"] = str(MODELS_FOLDER)
@@ -121,8 +128,7 @@ def ollama_environment() -> dict:
 
 def download_models() -> None:
     """Download the debater and judge models into models/, skipping any model that is already there."""
-    MODELS_FOLDER.mkdir(exist_ok=True)
-
+    # Here we list only the models that are not on disk yet, so nothing is downloaded twice.
     missing_models = [model for model in [DEBATER_MODEL, JUDGE_MODEL] if not model_is_downloaded(model)]
     if not missing_models:
         print(f"All models are already in models/: {DEBATER_MODEL}, {JUDGE_MODEL}")
@@ -132,26 +138,22 @@ def download_models() -> None:
         print("Ollama is not installed. Install it with: brew install ollama")
         return
 
-    # Here we start a temporary Ollama server that saves into models/, because `ollama pull` downloads
-    # through a running server. Its messages go to a log file in models/.
-    server_log = open(MODELS_FOLDER / "ollama-server.log", "a")
-    server = subprocess.Popen(["ollama", "serve"], env=ollama_environment(), stdout=server_log, stderr=server_log)
+    # Here we borrow the start and stop scripts from setup/. We import them only now, inside this function,
+    # because they import this file (settings.py) themselves; importing them at the top would go round in a circle.
+    sys.path.insert(0, str(SETUP_FOLDER))
+    from start_ollama_server import start_ollama_server
+    from stop_ollama_server import stop_ollama_server
 
-    # Here we wait until the server answers before asking it to download anything.
-    for _ in range(30):
-        try:
-            urllib.request.urlopen(OLLAMA_ADDRESS + "/api/version", timeout=2)
-            break
-        except OSError:
-            time.sleep(1)
-
-    for model_name in missing_models:
-        print(f"Downloading {model_name} into models/ ...")
-        subprocess.run(["ollama", "pull", model_name], env=ollama_environment(), check=True)
-
-    # Here we stop the temporary server, so nothing is left running after the download.
-    server.terminate()
-    server.wait()
+    # Here we make sure a server that saves into models/ is running, because `ollama pull` downloads through it.
+    started_here = start_ollama_server()
+    try:
+        for model_name in missing_models:
+            print(f"Downloading {model_name} into models/ ...")
+            subprocess.run(["ollama", "pull", model_name], env=ollama_environment(), check=True)
+    finally:
+        # Here we stop the server only if this function started it, even if a download fails.
+        if started_here:
+            stop_ollama_server()
 
     # Here we add up the size of every file in models/, to show how much space the models use.
     models_size_in_bytes = sum(file.stat().st_size for file in MODELS_FOLDER.rglob("*") if file.is_file())
@@ -173,18 +175,19 @@ def print_settings() -> None:
 
 if __name__ == "__main__":
     # This is how you will get started in terms of downloading the project requirements and setting up the models
-    create_project_structure()
-    install_ticket_one_requirements()
-    print_next_step()
+    # create_project_structure()
+    # install_ticket_one_requirements()
+    # print_next_step()
 
-    # To download the models (about 9.3 GB, into models/), remove the # in front of the next line and press play.
-    # download_models()
+    # # To download the models (about 9.3 GB, into models/), remove the # in front of the next line and press play.
+    # # download_models()
 
-    print()
-    print("To run any experiment in this project:")
-    print("    1. First press play on setup/start_ollama_server.py")
-    print("    2. Then run your experiments")
-    print("    3. When you have finished everything, press play on setup/stop_ollama_server.py")
+    # print()
+    # print("To run any experiment in this project:")
+    # print("    1. First press play on setup/start_ollama_server.py")
+    # print("    2. Then run your experiments")
+    # print("    3. When you have finished everything, press play on setup/stop_ollama_server.py")
+    # print("    (run.py also starts the server by itself if it is not running, and stops it again when it finishes.)")
 
     # Here we show the settings every experiment uses.
     print_settings()

@@ -33,6 +33,7 @@ def test_download_returns_all_58_runs_and_reads_a_known_run_correctly():
 
     assert len(all_runs) == 58
 
+    # Here we compare the first run with values read by hand from the raw file 1.json.
     first_run = all_runs[0]
     assert first_run.file_name == "1.json"
     assert len(first_run.steps) == 29
@@ -60,6 +61,7 @@ def test_a_download_that_stops_halfway_leaves_no_broken_file(tmp_path, monkeypat
 
 def make_run(number_of_steps: int, decisive_step: int) -> data.Trajectory:
     """Build a small made-up run with the given number of steps and Decisive step, for tests that need no real data."""
+    # Here we give every step the same agent and text, because these tests only care about the step numbers.
     steps = [data.Step(index=step_number, agent="WebSurfer", text="...") for step_number in range(number_of_steps)]
     return data.Trajectory(
         file_name="made-up.json",
@@ -74,12 +76,14 @@ def make_run(number_of_steps: int, decisive_step: int) -> data.Trajectory:
 
 def test_a_run_whose_decisive_step_does_not_exist_is_removed_with_a_reason(capsys):
     """A run labelled with step 5 but holding only steps 0 to 2 is removed, and the printout says why."""
+    # Here we make one run whose Decisive step exists (step 1) and one whose Decisive step does not (step 5 of 0-2).
     good_run = make_run(number_of_steps=3, decisive_step=1)
     bad_run = make_run(number_of_steps=3, decisive_step=5)
 
     usable_runs = data.remove_bad_runs([good_run, bad_run])
 
     assert usable_runs == [good_run]
+    # Here we read what was printed, to check the reason for the removal was given.
     printed_text = capsys.readouterr().out
     assert "step 5" in printed_text
     assert "steps 0 to 2" in printed_text
@@ -88,6 +92,7 @@ def test_a_run_whose_decisive_step_does_not_exist_is_removed_with_a_reason(capsy
 def test_all_58_real_runs_are_usable():
     """In the JSON version of Who&When every Decisive step exists, so all 58 runs are kept.
     (The Parquet version has 3 broken labels; the JSON files have them corrected.)"""
+    # Here we use the real downloaded files (already on disk after the first test run).
     all_runs = data.download_who_and_when()
 
     usable_runs = data.remove_bad_runs(all_runs)
@@ -98,6 +103,7 @@ def test_all_58_real_runs_are_usable():
 def test_printing_a_run_by_number_shows_its_steps_and_then_its_label(capsys):
     """Run number 1 is 1.json: the printout shows its question and ends with its label (Decisive step 12, WebSurfer)."""
     usable_runs = data.remove_bad_runs(data.download_who_and_when())
+    # Here we throw away what loading printed, so only the printout of run 1 is checked.
     capsys.readouterr()
 
     data.print_trajectory(usable_runs, 1)
@@ -112,6 +118,7 @@ def test_printing_a_run_number_that_does_not_exist_gives_a_clear_message(capsys)
     """Asking for run 0 or a number past the last run prints which numbers are allowed, instead of crashing."""
     usable_runs = [make_run(number_of_steps=3, decisive_step=1)]
 
+    # Here we ask for one number below the range (0) and one above it (2), with only run 1 available.
     data.print_trajectory(usable_runs, 0)
     data.print_trajectory(usable_runs, 2)
 
@@ -166,11 +173,13 @@ def test_human_review_split_writes_five_different_runs_without_their_labels(tmp_
 
 def test_human_review_split_refuses_when_the_folder_is_not_empty(tmp_path, capsys):
     """If the review folder already holds a file, nothing is written, so typed answers are never lost."""
+    # Here we pretend a reviewer already filled in a file.
     existing_review = tmp_path / "run_3.md"
     existing_review.write_text("answers typed by a reviewer")
 
     data.human_review_split(make_six_different_runs(), review_folder=tmp_path)
 
+    # Here we check that no new file appeared and the reviewer's answers are untouched.
     assert [path.name for path in tmp_path.iterdir()] == ["run_3.md"]
     assert existing_review.read_text() == "answers typed by a reviewer"
     assert "not empty" in capsys.readouterr().out

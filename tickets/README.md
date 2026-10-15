@@ -24,11 +24,12 @@ tests/                          tests in pipeline order
   test_2_data.py                the data                                                                        02 ✓
 data.py                         download Who&When, remove bad runs, print a run, splits, human review set       02 ✓
 data_analysis.ipynb             data analysis for the midterm report (runs on Kaggle or the Mac)                02 ✓
-run.py                          runs the pilot and later runs                                  exists empty;    04
-models.py                       call(): the only way to ask a model; counts calls and tokens                    03
+informatics.md                  how each method works + its rules; read before building a method              04+
+run.py                          ask_model(): the only way to ask a model; counts every call                     03
+                                write_log(): one question's log; write_results_file(): results.jsonl            03, 04
+                                run_<method>(json_file): one per method, runs it on one Trajectory              04+
 score.py                        compares a predicted step with the Decisive step                                04
-run_log.py                      writes each run to runs/<scenario>/<start time>/                                04
-methods/                        one file per method, all with the same shape
+methods/                        one file per method; asks the models only through ask_model()
   prover_estimator_debate.py                                                                                    04
   standard_debate.py                                                                                            06
   all_at_once.py                                                                                                07
@@ -40,12 +41,12 @@ Not in git (created on your machine):
 .cache/pip/                     pip's download cache                                                            01 ✓
 models/                         the Ollama models (about 9.2 GB)                                                01 ✓
 data/who_and_when/              the 58 downloaded runs (about 4 MB)                                             02 ✓
+runs/<method>/<start time>/     one run_<number>.md log per question + results.jsonl                            04
 
 In git, created by a script:
 data/splits/                    pilot.json (1 run) and test.json (all runs)                                     02
 data/human_review/              5 unlabelled runs for a person to fill in (run_<number>.md)                     02
-figures/                        PNG figures written by data_analysis.ipynb                                      02
-runs/                           run logs                                                                        04
+figures/                        PNG figures written by data_analysis.ipynb (push or not: ticket 23)             02
 ```
 
 Setup steps for a fresh clone are in the main [README](../README.md).
@@ -56,7 +57,7 @@ Setup steps for a fresh clone are in the main [README](../README.md).
 |---|---|---|---|
 | 01 | [Environment inside the repo](01-environment-inside-the-repo.md) ✅ | build | none |
 | 02 | [Load Who&When and read it](02-load-who-and-when.md) 🟡 (first split, review set and team reading left) | build | 01 |
-| 03 | [Count every model call](03-count-every-model-call.md) | build | 01 |
+| 03 | [Ask a model, count every call, and log it](03-count-every-model-call.md) ✅ | build | 01 |
 | 04 | [Prover-estimator debate end to end](04-prover-estimator-debate-end-to-end.md) | build | 02, 03 |
 | 05 | [Review the first version](05-review-the-first-version.md) | think | 04 |
 | 06 | [Standard debate](06-standard-debate.md) | build | 05 |
@@ -76,5 +77,6 @@ Setup steps for a fresh clone are in the main [README](../README.md).
 | 20 | [Final figures and tables](20-final-figures-and-tables.md) | build | 19 |
 | 21 | [Fine-tuned debaters](21-fine-tuned-debaters.md) | build | 13 |
 | 22 | [Debate at a Checkpoint](22-debate-at-a-checkpoint.md) | build | 15 |
+| 23 | [Redo notebook](23-redo-notebook.md) | think | 02 |
 
 **Can run in parallel:** 02 and 03; 09 and 11 alongside 05–08; 16 alongside 06–15; 21 and 15 after 13.

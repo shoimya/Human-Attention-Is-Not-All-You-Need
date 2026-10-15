@@ -263,10 +263,7 @@ def print_steps_and_label(run: Trajectory) -> None:
 
 
 if __name__ == "__main__":
-    # Here we create data/who_and_when/ and data/splits/ if they are missing.
-    set_up_data_folder()
-
-    # Here we download any missing runs and read all 58 of them.
+    # Here we download any missing runs and read all 58 of them (this also creates the data folders if needed).
     all_runs = download_who_and_when()
 
     # Here we keep only the runs whose Decisive step exists (all 58 with the JSON files).
