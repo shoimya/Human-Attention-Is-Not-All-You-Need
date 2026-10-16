@@ -32,8 +32,14 @@ VIRTUAL_ENVIRONMENT_FOLDER = REPO_FOLDER / ".venv"
 PIP_CACHE_FOLDER = REPO_FOLDER / ".cache" / "pip"
 REQUIREMENTS_FILE = REPO_FOLDER / "requirements.txt"
 
-# Here we keep the Ollama models inside the project, wherever the project folder is on the computer.
-MODELS_FOLDER = REPO_FOLDER / "models"
+# Here we check whether this code runs on Kaggle: every Kaggle notebook has the folder /kaggle/working.
+RUNNING_ON_KAGGLE = Path("/kaggle/working").exists()
+
+# Here we keep the Ollama models inside the project on the Mac, wherever the project folder is on the computer.
+# On Kaggle they go to /tmp instead: everything in /kaggle/working is saved with each notebook version and counts
+# towards Kaggle's 20 GB limit, and the models (about 9.3 GB) download again in a few minutes.
+KAGGLE_MODELS_FOLDER = Path("/tmp/ollama_models")
+MODELS_FOLDER = KAGGLE_MODELS_FOLDER if RUNNING_ON_KAGGLE else REPO_FOLDER / "models"
 
 # Here we give this project its own Ollama port, so the code never talks to another Ollama server
 # (the Ollama app or another project use the default port 11434).
@@ -44,11 +50,15 @@ OLLAMA_ADDRESS = f"http://127.0.0.1:{OLLAMA_PORT}"
 DEBATER_MODEL = "qwen3.5:9b"
 JUDGE_MODEL = "qwen3.5:2b"
 
-# Here we set how many tokens a model may read in one call (its context window). Ollama's default is about 2,000
-# and it silently drops the rest of a longer prompt. 65,536 fits 57 of the 58 runs, including the pilot
-# (run 36, about 35,000 tokens), and fits in a 16 GB Mac's memory (measured 2026-10-08: about 7.9 GB, 4 minutes
-# per call on the full pilot run). The longest run (about 87,000 tokens) needs a larger window, on Kaggle.
-OLLAMA_CONTEXT_WINDOW = 65536
+# Here we set the largest number of tokens a model may read in one call (its context window) on this machine.
+# Each call asks only for the window its own prompt needs (context_window_for() in runV2.py), up to this largest one.
+# Ollama's default is about 2,000 and it silently drops the rest of a longer prompt.
+# Mac: 65,536 fits 57 of the 58 runs, including the pilot (run 36, about 35,000 tokens), and fits in a 16 GB Mac's
+# memory (measured 2026-10-08: about 7.9 GB, 4 minutes per call on the full pilot run).
+# Kaggle: 131,072 also fits the longest run (run 30, about 86,000 tokens) on one 15 GB T4 GPU.
+MAC_LARGEST_CONTEXT_WINDOW = 65536
+KAGGLE_LARGEST_CONTEXT_WINDOW = 131072
+OLLAMA_CONTEXT_WINDOW = KAGGLE_LARGEST_CONTEXT_WINDOW if RUNNING_ON_KAGGLE else MAC_LARGEST_CONTEXT_WINDOW
 
 
 def create_project_structure() -> None:
@@ -123,6 +133,9 @@ def ollama_environment() -> dict:
     environment["OLLAMA_MODELS"] = str(MODELS_FOLDER)
     # Here we tell Ollama to use this project's port, both for the server and for `ollama pull`.
     environment["OLLAMA_HOST"] = f"127.0.0.1:{OLLAMA_PORT}"
+    # Here we make the server answer one request at a time. Ollama keeps memory for every request it answers at once,
+    # so this keeps exactly one context window in memory.
+    environment["OLLAMA_NUM_PARALLEL"] = "1"
     return environment
 
 
@@ -168,7 +181,10 @@ def print_settings() -> None:
     print(f"    Debater model:  {DEBATER_MODEL}  (downloaded: {model_is_downloaded(DEBATER_MODEL)})")
     print(f"    Judge model:    {JUDGE_MODEL}  (downloaded: {model_is_downloaded(JUDGE_MODEL)})")
     print(f"    Ollama server:  {OLLAMA_ADDRESS}")
-    print(f"    Models folder:  {MODELS_FOLDER.relative_to(REPO_FOLDER)}/")
+    print(f"    Machine:        {'Kaggle' if RUNNING_ON_KAGGLE else 'Mac'}")
+    print(f"    Largest context window: {OLLAMA_CONTEXT_WINDOW} tokens")
+    # Here we show the models folder in full, because on Kaggle it is outside the project (in /tmp).
+    print(f"    Models folder:  {MODELS_FOLDER}/")
     print(f"    Python:         {VIRTUAL_ENVIRONMENT_FOLDER.relative_to(REPO_FOLDER)}/")
     print(f"    pip cache:      {PIP_CACHE_FOLDER.relative_to(REPO_FOLDER)}/")
 

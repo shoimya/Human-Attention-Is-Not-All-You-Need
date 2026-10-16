@@ -9,6 +9,7 @@ How every method uses this file:
 
 What is in this file:
     format_steps_as_text()  the one marker function: turns a run's steps into one block of numbered text
+    context_window_for()    how many tokens one call's context window needs: its prompt plus room for the reply
     send_to_ollama()        one call: one role's system prompt, the steps and a question go to the live model,
                             the call is logged, and the model's JSON answer comes back
     count_calls()           how many calls and tokens a question used (one call = one prompt + one reply)
@@ -20,6 +21,7 @@ How to use it:
 """
 
 import json
+import math
 import time
 import urllib.request
 from pathlib import Path
@@ -33,6 +35,17 @@ HIT_TOLERANCE_IN_STEPS = 2
 # Here we say how close to the context window a prompt may come before we warn that part of it may have been dropped.
 CONTEXT_WINDOW_SAFETY_MARGIN = 100
 
+# Here we set how each call's context window is sized (context_window_for()).
+# Measured in ticket 03: one token is about 3.6 characters. Some text needs more tokens than that, so we add 25%.
+CHARACTERS_PER_TOKEN = 3.6
+TOKEN_ESTIMATE_SAFETY_FACTOR = 1.25
+# Here we set the most tokens a reply may have. The window keeps this much room free for it, and the model is
+# stopped at this length, so a long reply can never push the start of the prompt out of the window.
+ROOM_FOR_REPLY_IN_TOKENS = 4096
+# Here we round every window up to whole blocks of 8,192 tokens, so most runs share a few sizes: Ollama reloads
+# the model each time the window size changes.
+CONTEXT_WINDOW_BLOCK_IN_TOKENS = 8192
+
 
 def format_steps_as_text(steps: list[data.Step]) -> str:
     """Turn a run's steps into one block of text: each step gets a header with its number and agent, then its text."""
@@ -42,15 +55,44 @@ def format_steps_as_text(steps: list[data.Step]) -> str:
     return "\n".join(marked_steps)
 
 
+def context_window_for(system_prompt: str, prompt: str) -> int:
+    """Return a context window just big enough for this call's prompt and its reply, in whole blocks of 8,192 tokens,
+    and never bigger than the largest window this machine holds (settings.py)."""
+    # Here we estimate the prompt's tokens from its characters, then add the safety margin and the room for the reply.
+    estimated_prompt_tokens = (len(system_prompt) + len(prompt)) / CHARACTERS_PER_TOKEN
+    needed_tokens = estimated_prompt_tokens * TOKEN_ESTIMATE_SAFETY_FACTOR + ROOM_FOR_REPLY_IN_TOKENS
+
+    # Here we round up to the next whole block, so the window is never smaller than what is needed.
+    number_of_blocks = math.ceil(needed_tokens / CONTEXT_WINDOW_BLOCK_IN_TOKENS)
+    rounded_window = number_of_blocks * CONTEXT_WINDOW_BLOCK_IN_TOKENS
+
+    # Here we never ask for more than this machine holds; a longer prompt is then cut and its log warns about it.
+    return min(rounded_window, settings.OLLAMA_CONTEXT_WINDOW)
+
+
 def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.Step], question: str,
                    answer_format: dict, temperature: float, seed: int, log: list) -> dict:
     """Make one call: send a role's system prompt, the steps and a question to the live model and return its JSON answer.
 
     One call = one prompt sent to one model and its one reply. Every call is added to the log in full,
     so counting the log counts the calls. Each method sets its own temperature and seed.
+
+    Inputs:
+        role            who is asking, logged
+        model           which Ollama model answers
+        system_prompt   the role's rules
+        steps           the run's steps sent
+        question        asked after the steps
+        answer_format   JSON shape of answer
+        temperature     how random replies are
+        seed            fixes the randomness
+        log             list collecting every call
     """
     # Here we put the marked steps first and the question after them, as one prompt.
     prompt = format_steps_as_text(steps) + "\n" + question
+
+    # Here we size this call's context window to its own prompt and reply.
+    context_window = context_window_for(system_prompt, prompt)
 
     # Here we build the message in Ollama's chat format: the role's rules as the system prompt, then the prompt.
     request_body = {
@@ -64,10 +106,16 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         "think": False,
         # Here we make the model answer in the JSON shape the method asks for.
         "format": answer_format,
-        # Here we let the model read up to the context window from settings.py; without it Ollama reads only
+        # Here we let the model read this call's whole context window; without it Ollama reads only
         # about 2,000 tokens and silently drops the rest of the prompt.
+        # num_predict stops the reply at the room kept free for it, so the reply never pushes out the prompt.
         # The temperature and seed are the method's own, so its randomness is fixed and can be repeated.
-        "options": {"num_ctx": settings.OLLAMA_CONTEXT_WINDOW, "temperature": temperature, "seed": seed},
+        "options": {
+            "num_ctx": context_window,
+            "num_predict": ROOM_FOR_REPLY_IN_TOKENS,
+            "temperature": temperature,
+            "seed": seed,
+        },
     }
     # Here we address the message to this project's server (port 11500) as JSON.
     request = urllib.request.Request(
@@ -91,13 +139,18 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         "role": role,
         "model": model,
         "system_prompt": system_prompt,
-        "prompt": prompt,
+        # "prompt": prompt,
         "reply": reply,
         "tokens_read": tokens_read,
         "tokens_written": server_answer.get("eval_count", 0),
         "seconds": seconds,
-        # Here we mark a call whose prompt filled the context window: Ollama may have dropped part of it.
-        "prompt_may_be_cut": tokens_read >= settings.OLLAMA_CONTEXT_WINDOW - CONTEXT_WINDOW_SAFETY_MARGIN,
+        "temperature": temperature,
+        "seed": seed,
+        "context_window": context_window,
+        # Here we mark a call whose prompt filled its context window: Ollama may have dropped part of it.
+        "prompt_may_be_cut": tokens_read >= context_window - CONTEXT_WINDOW_SAFETY_MARGIN,
+        # Here we mark a reply that Ollama stopped because it reached the reply limit ("length"), not because it ended.
+        "reply_was_cut": server_answer.get("done_reason") == "length",
     })
 
     # Here we turn the JSON reply into a Python dictionary, for example {"step": 4}.
@@ -120,6 +173,15 @@ def write_log(log: list, run_folder: Path, method_name: str, run_number: int,
 
     predicted_step is None when no call gave a valid step. extra_result_lines are the method's own lines for the
     result, for example "Calls allowed: 10".
+
+    Inputs:
+        log                 every call made
+        run_folder          where the log goes
+        method_name         log's title, e.g. One-shot
+        run_number          which run, 1 to 58
+        question            the run and label
+        predicted_step      the method's answer
+        extra_result_lines  method's own result lines
     """
     # Here we work out the totals and whether the answer is right, for the result at the bottom.
     # With no answer, it is neither exactly right nor within tolerance.
@@ -151,18 +213,22 @@ def write_log(log: list, run_folder: Path, method_name: str, run_number: int,
     for call_number, entry in enumerate(log, start=1):
         lines += [
             f"### Call {call_number}: {entry['role']} ({entry['model']}) | "
-            f"{entry['tokens_read']} tokens read, {entry['tokens_written']} written, {entry['seconds']} s",
+            f"{entry['tokens_read']} tokens read, {entry['tokens_written']} written, {entry['seconds']} s | "
+            f"temperature {entry['temperature']}, seed {entry['seed']}, context window {entry['context_window']}",
             "",
         ]
-        # Here we warn loudly if this call's prompt filled the context window, because the model may not have seen all of it.
+        # Here we warn loudly if this call's prompt filled its context window, because the model may not have seen all of it.
         if entry["prompt_may_be_cut"]:
-            lines += [f"**WARNING: PROMPT MAY HAVE BEEN CUT** (it filled the {settings.OLLAMA_CONTEXT_WINDOW}-token "
+            lines += [f"**WARNING: PROMPT MAY HAVE BEEN CUT** (it filled the {entry['context_window']}-token "
                       "context window, so the model may not have seen all of it)", ""]
+        # Here we warn loudly if the reply was stopped at the reply limit, because its end (often the JSON) is missing.
+        if entry["reply_was_cut"]:
+            lines += [f"**WARNING: REPLY WAS CUT** (it reached the {ROOM_FOR_REPLY_IN_TOKENS}-token reply limit)", ""]
         # Here we show the system prompt again only if this role's system prompt changed during the question.
         if entry["system_prompt"] != system_prompt_by_role[entry["role"]]:
             lines += ["**System prompt changed to:**", "````text", entry["system_prompt"], "````", ""]
-        lines += ["**Prompt:**", "````text", entry["prompt"], "````", "", "**Reply:**", "````text", entry["reply"], "````", ""]
-
+        # lines += ["**Prompt:**", "````text", entry["prompt"], "````", "", "**Reply:**", "````text", entry["reply"], "````", ""]
+        lines += ["**Reply:**", "````text", entry["reply"], "````", ""] #I no longer want to see the prompt in the log
     # Here we write the result: the answer, the label, whether it is right, and the totals.
     lines += [
         "## Result",

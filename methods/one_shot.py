@@ -24,11 +24,26 @@ import runV2
 import settings
 
 # Here we set the role's rules. The run's task question is already step 0, so it is not added again.
+# version 1
+# SystemPrompt = (
+#     "You review a failed run of a team of AI agents. The run is given as numbered steps, starting at Step 0. "
+#     "Find the first step where the run went wrong: the earliest step where, had that step been done right, "
+#     "the run would not have failed. when generating this answer you must produce your chain of thought for why you are choosing that step."
+#     "Answer only in JSON: the step number and one sentence saying why."
+# )
+# version 2
 SystemPrompt = (
-    "You review a failed run of a team of AI agents. The run is given as numbered steps, starting at Step 0. "
-    "Find the first step where the run went wrong: the earliest step where, had that step been done right, "
-    "the run would not have failed. Answer only in JSON: the step number and one sentence saying why."
+    "You review a failed run of a team of AI agents. The run is given as numbered steps, starting at Step 0, "
+    "which is the task. "
+    "Find the decisive step: the earliest step where, had that step been done right, the run would not have failed. "
+    "A later step that only follows from an earlier mistake is not the decisive step. "
+    "Answer only in JSON with three fields, in this order. "
+    "reasoning: go through the steps in order, note in a few words each step that looks wrong, "
+    "and say whether the failure follows from it; stop once you have found the decisive step. "
+    "step: the decisive step's number. "
+    "reason: one sentence saying what went wrong at that step."
 )
+
 # Here we set how many times the model is asked. Once the experiments show the debate's average number of calls,
 # that average replaces this number.
 DefaultNoOfCalls = 10
@@ -37,15 +52,23 @@ question = "Which step is the first one where the run went wrong? Give its step 
 
 # Here we fix the randomness for now; both can be changed later.
 Temperature = 0.7
-Seed = 42
+Seed = 41
 
 # Here we set the answer's JSON shape: the step number and one sentence saying why.
+# AnswerFormat = {
+#     "type": "object",
+#     "properties": {"step": {"type": "integer"}, "reason": {"type": "string"}},
+#     "required": ["step", "reason"],
+# }
 AnswerFormat = {
     "type": "object",
-    "properties": {"step": {"type": "integer"}, "reason": {"type": "string"}},
-    "required": ["step", "reason"],
+    "properties": {
+        "reasoning": {"type": "string"},
+        "step": {"type": "integer"},
+        "reason": {"type": "string"},
+    },
+    "required": ["reasoning", "step", "reason"],
 }
-
 
 def run_one_shot(run: data.Trajectory, run_number: int, log_folder: Path) -> int | None:
     """Run one-shot on one run, write its log into log_folder, and return the answer (None if no call gave a step)."""
@@ -55,7 +78,8 @@ def run_one_shot(run: data.Trajectory, run_number: int, log_folder: Path) -> int
 
     for call_number in range(1, DefaultNoOfCalls + 1):
         # Here we ask the model once; ask_for_one_step() tells us the step, or why this call gets no vote.
-        step, vote_line = ask_for_one_step(run, log)
+        call_seed = Seed + call_number #lets vary the seed for each call as we need some randomness
+        step, vote_line = ask_for_one_step(run, log, call_seed)
         votes.append(step)
         vote_lines.append(f"Call {call_number}: {vote_line}")
 
@@ -78,11 +102,11 @@ def run_one_shot(run: data.Trajectory, run_number: int, log_folder: Path) -> int
     return answer
 
 
-def ask_for_one_step(run: data.Trajectory, log: list) -> tuple[int | None, str]:
+def ask_for_one_step(run: data.Trajectory, log: list, dynamicseed: int) -> tuple[int | None, str]:
     """Ask the debater model once for the step; return the step and a line for the log, or None and why it has no vote."""
     try:
         answer = runV2.send_to_ollama("one-shot", settings.DEBATER_MODEL, SystemPrompt, run.steps, question,
-                                      AnswerFormat, Temperature, Seed, log)
+                                      AnswerFormat, Temperature, dynamicseed, log)
     except json.JSONDecodeError:
         # Here a reply that is not valid JSON still counts as a call (it is already in the log), but gets no vote.
         return None, "no vote, the reply was not valid JSON"

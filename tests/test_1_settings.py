@@ -44,6 +44,24 @@ def test_ollama_keeps_its_models_in_the_project_and_uses_this_projects_port():
     assert environment["OLLAMA_HOST"] == "127.0.0.1:11500"
 
 
+def test_the_server_answers_one_request_at_a_time():
+    """Ollama keeps memory for every request it answers at once, so one at a time means one context window in memory."""
+    assert settings.ollama_environment()["OLLAMA_NUM_PARALLEL"] == "1"
+
+
+def test_this_mac_uses_the_mac_settings():
+    """On the Mac the project is not on Kaggle, and a call may read up to the Mac's largest context window."""
+    assert settings.RUNNING_ON_KAGGLE is False
+    assert settings.OLLAMA_CONTEXT_WINDOW == settings.MAC_LARGEST_CONTEXT_WINDOW
+
+
+def test_kaggle_keeps_the_models_out_of_its_saved_folder_and_reads_longer_prompts():
+    """On Kaggle the models stay out of /kaggle/working (saved with every notebook version, 20 GB limit),
+    and the larger GPU memory allows a larger context window than the Mac, so the longest run fits."""
+    assert Path("/kaggle/working") not in settings.KAGGLE_MODELS_FOLDER.parents
+    assert settings.KAGGLE_LARGEST_CONTEXT_WINDOW > settings.MAC_LARGEST_CONTEXT_WINDOW
+
+
 def test_project_folders_and_files_exist():
     """The setup creates these folders and files; the start and stop scripts must be in setup/."""
     # Here we list everything ticket 01 promises to create, then check each one is on disk.
