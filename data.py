@@ -6,8 +6,9 @@ Everything in this file is built specifically for Visual Studio Code on a Mac.
 How to use it:
     Press play. It downloads the 58 Who&When runs into data/who_and_when/ (only missing files, about 4 MB),
     removes any run whose Decisive step does not exist, and prints run 1 (change run_to_print at the bottom).
-    Two more steps are switched off at the bottom of this file; remove the # in front of one and press play:
+    Three more steps are switched off at the bottom of this file; remove the # in front of one and press play:
       - split_pilot_and_test   writes data/splits/pilot.json (1 random run) and test.json (all runs)
+      - create_splits          writes data/splits/local.json (a number of random runs you choose), to try a few on the Mac
       - human_review_split     writes 5 random runs without their labels to data/human_review/ for people to fill in
 
 Why the runs are kept as JSON files:
@@ -50,7 +51,6 @@ HUMAN_REVIEW_FOLDER = DATA_FOLDER / "human_review"    # the files people fill in
 NUMBER_OF_HUMAN_REVIEW_RUNS = 5
 
 # Here we say where Who&When's Hand-Crafted runs are on Hugging Face: files 1.json to 58.json.
-# "%26" is how "&" in the folder name "Who&When" is written in a web address.
 WHO_AND_WHEN_ADDRESS = "https://huggingface.co/datasets/Kevin355/Who_and_When/resolve/main/Who%26When/Hand-Crafted/"
 NUMBER_OF_WHO_AND_WHEN_RUNS = 58
 
@@ -186,6 +186,32 @@ def split_pilot_and_test(usable_runs: list[Trajectory], splits_folder: Path = SP
     print(f"New split: pilot = run {pilot_number} ({pilot_entries[0]['file']}), test = all {len(all_entries)} runs.")
 
 
+def create_splits(numofsplits: int, usable_runs: list[Trajectory], splits_folder: Path = SPLITS_FOLDER) -> None:
+    """Write local.json: numofsplits different random runs, to try a method on a few runs on the Mac before a full
+    run on Kaggle. Replaces the old local.json; pilot.json and test.json, shared by the team, are never touched."""
+    # Here we check the number of runs can be picked: at least 1, and no more than there are runs.
+    if not 1 <= numofsplits <= len(usable_runs):
+        print(f"Cannot pick {numofsplits} runs. Choose a number from 1 to {len(usable_runs)}.")
+        return
+
+    # Here we pick different run numbers from 1 to the number of runs; sample never picks the same number twice.
+    chosen_numbers = sorted(random.sample(range(1, len(usable_runs) + 1), numofsplits))
+
+    # Here we describe each run like the other split files do: its number, ID and file name.
+    local_entries = []
+    for run_number in chosen_numbers:
+        # Here we turn the run number (counting from 1) into a list position (counting from 0).
+        run = usable_runs[run_number - 1]
+        local_entries.append({"number": run_number, "id": run.id, "file": run.file_name})
+
+    # Here we write {numofsplits}_local.json, replacing the old one if there is one.
+    splits_folder.mkdir(parents=True, exist_ok=True)
+    local_file = splits_folder / f"{numofsplits}_local.json"
+    local_file.write_text(json.dumps(local_entries, indent=2))
+
+    print(f"New local split: {numofsplits} runs {chosen_numbers}, written to {local_file.name}.")
+
+
 def human_review_split(usable_runs: list[Trajectory], review_folder: Path = HUMAN_REVIEW_FOLDER) -> None:
     """Write 5 random runs, without their labels, as files a person fills in. Refuses unless the folder is empty."""
     review_folder.mkdir(parents=True, exist_ok=True)
@@ -270,13 +296,17 @@ if __name__ == "__main__":
     usable_runs = remove_bad_runs(all_runs)
 
     # Here we choose which run to print: change this number to any run from 1 to the number of usable runs (58).
-    run_to_print = 1
-    print_trajectory(usable_runs, run_to_print)
+    # run_to_print = 1
+    # print_trajectory(usable_runs, run_to_print)
 
+    
+    
+    
     # To make a new pilot and test split, remove the # in front of the next line and press play.
-    # This replaces the current split files in data/splits/.
-    # split_pilot_and_test(usable_runs)
+    ## split_pilot_and_test(usable_runs)
+
+    # To pick a few random runs to try on the Mac (data/splits/local.json), remove the # in front of the next line,
+    create_splits(5, usable_runs)
 
     # To make a human review set (5 random runs without their labels, in data/human_review/),
-    # remove the # in front of the next line and press play. It only works when data/human_review/ is empty.
-    # human_review_split(usable_runs)
+    ## human_review_split(usable_runs)

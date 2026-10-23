@@ -39,9 +39,17 @@ CONTEXT_WINDOW_SAFETY_MARGIN = 100
 # Measured in ticket 03: one token is about 3.6 characters. Some text needs more tokens than that, so we add 25%.
 CHARACTERS_PER_TOKEN = 3.6
 TOKEN_ESTIMATE_SAFETY_FACTOR = 1.25
-# Here we set the most tokens a reply may have. The window keeps this much room free for it, and the model is
-# stopped at this length, so a long reply can never push the start of the prompt out of the window.
-ROOM_FOR_REPLY_IN_TOKENS = 4096
+
+# Here we switch the models' thinking on (True) or off (False) for every call.
+THINKING_ON = False
+
+# Here we leave far more room when the model thinks, because its thinking counts towards the reply limit;
+# with only 4,096 tokens a long think would be cut before the JSON answer.
+ROOM_FOR_REPLY_IN_TOKENS = 16384 if THINKING_ON else 4096
+
+# Here we wait longer for a reply when the model thinks, because thinking can write thousands of tokens.
+SECONDS_TO_WAIT_FOR_A_REPLY = 7200 if THINKING_ON else 1800
+
 # Here we round every window up to whole blocks of 8,192 tokens, so most runs share a few sizes: Ollama reloads
 # the model each time the window size changes.
 CONTEXT_WINDOW_BLOCK_IN_TOKENS = 8192
@@ -103,7 +111,7 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         ],
         # Here we ask for the whole reply at once, and switch thinking off so the reply is only the answer.
         "stream": False,
-        "think": False,
+        "think": THINKING_ON,
         # Here we make the model answer in the JSON shape the method asks for.
         "format": answer_format,
         # Here we let the model read this call's whole context window; without it Ollama reads only
@@ -126,13 +134,16 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
 
     # Here we wait for the reply; a long prompt on a Mac can take minutes, so we allow up to 30 minutes.
     start_time = time.time()
-    with urllib.request.urlopen(request, timeout=1800) as response:
+    with urllib.request.urlopen(request, timeout=SECONDS_TO_WAIT_FOR_A_REPLY) as response:
         server_answer = json.load(response)
     seconds = round(time.time() - start_time, 1)
 
     # Here we read Ollama's token counts: prompt_eval_count = tokens read, eval_count = tokens written.
     tokens_read = server_answer.get("prompt_eval_count", 0)
     reply = server_answer["message"]["content"]
+
+    # Here we keep the model's thinking, which Ollama returns apart from the answer; it is empty when thinking is off.
+    thinking = server_answer["message"].get("thinking", "")
 
     # Here we record the whole call before reading the answer, so the log keeps it even if the reply is not valid JSON.
     log.append({
@@ -141,6 +152,7 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         "system_prompt": system_prompt,
         # "prompt": prompt,
         "reply": reply,
+        "thinking": thinking,
         "tokens_read": tokens_read,
         "tokens_written": server_answer.get("eval_count", 0),
         "seconds": seconds,
@@ -195,6 +207,8 @@ def write_log(log: list, run_folder: Path, method_name: str, run_number: int,
         "",
         f"**Question:** {question.question}",
         "",
+        f"**Thinking:** {'on' if THINKING_ON else 'off'}",
+        "",
         "## System prompts",
         "",
     ]
@@ -227,6 +241,8 @@ def write_log(log: list, run_folder: Path, method_name: str, run_number: int,
         # Here we show the system prompt again only if this role's system prompt changed during the question.
         if entry["system_prompt"] != system_prompt_by_role[entry["role"]]:
             lines += ["**System prompt changed to:**", "````text", entry["system_prompt"], "````", ""]
+        if entry.get("thinking"):
+            lines += ["**Thinking:**", "````text", entry["thinking"], "````", ""]
         # lines += ["**Prompt:**", "````text", entry["prompt"], "````", "", "**Reply:**", "````text", entry["reply"], "````", ""]
         lines += ["**Reply:**", "````text", entry["reply"], "````", ""] #I no longer want to see the prompt in the log
     # Here we write the result: the answer, the label, whether it is right, and the totals.
@@ -262,37 +278,3 @@ if __name__ == "__main__":
     # Here we print the run exactly as the models will see it, so you can check the step markers by hand.
     print(format_steps_as_text(run.steps))
 
-    # # Here we borrow the start and stop scripts' functions; they live in setup/, so we add that folder to the search path.
-    # sys.path.insert(0, str(Path(__file__).resolve().parent / "setup"))
-    # from start_ollama_server import start_ollama_server
-    # from stop_ollama_server import stop_ollama_server
-
-    # # Here we start the server only if it is not running, and remember whether we did,
-    # # so at the end we stop only a server this file started and never one someone else is using.
-    # started_here = start_ollama_server()
-
-    # # Here "try ... finally" makes sure the server we started is stopped even if something below fails.
-    # try:
-    #     # Here we ask the judge, on the live model, which step went wrong first, and ask for the answer as {"step": <number>}.
-    #     demo_log = []
-    #     answer = send_to_ollama(
-    #         role="judge",
-    #         model=settings.JUDGE_MODEL,
-    #         system_prompt="You read a failed agent run and find the first step where it went wrong.",
-    #         steps=run.steps,
-    #         question="Which step is the first one that went wrong? Answer with its step number.",
-    #         answer_format={"type": "object", "properties": {"step": {"type": "integer"}}, "required": ["step"]},
-    #         temperature=0.7,
-    #         seed=42,
-    #         log=demo_log,
-    #     )
-    #     print("Answer:", answer)
-    #     print("Counted:", count_calls(demo_log))
-
-    #     # Here we write the log to runs/demo/<start time>/, so you can read the whole call as a method's log looks.
-    #     run_folder = Path(__file__).resolve().parent / "runs" / "demo" / time.strftime("%Y-%m-%d_%H-%M-%S")
-    #     log_file = write_log(demo_log, run_folder, "Demo", run_number, run, predicted_step=answer["step"])
-    #     print("Log written to:", log_file)
-    # finally:
-    #     if started_here:
-    #         stop_ollama_server()

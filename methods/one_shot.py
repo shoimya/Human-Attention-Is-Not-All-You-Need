@@ -7,8 +7,16 @@ How to use it:
     Press play on this file. It runs one-shot on the pilot run (data/splits/pilot.json) with the live model and
     writes the log to runs/one_shot/<date>/run_<number>_<time>.md. If this project's Ollama server is not running,
     it starts it and stops it again at the end.
+
+Notes from paper:
+GPT-4-turbo, GPT-4o-mini, Llama-3.1-8B and 70B, and Qwen-2.5-7B and 72B, on hand-crafted logs only.
+at best 14% accuracy
+
+and we are doing DEBATER_MODEL = "qwen3.5:9b" JUDGE_MODEL = "qwen3.5:2b"
 """
 
+from ast import For
+from datetime import datetime
 import json
 import sys
 import time
@@ -31,15 +39,15 @@ import settings
 #     "the run would not have failed. when generating this answer you must produce your chain of thought for why you are choosing that step."
 #     "Answer only in JSON: the step number and one sentence saying why."
 # )
-# version 2
+# version 3
 SystemPrompt = (
-    "You review a failed run of a team of AI agents. The run is given as numbered steps, starting at Step 0, "
+    "You review a failed run of a team of agents. The run is given as numbered steps, starting at Step 0, "
     "which is the task. "
-    "Find the decisive step: the earliest step where, had that step been done right, the run would not have failed. "
+    "Find the decisive step: the step where, had that step been done right, the run would not have failed. "
     "A later step that only follows from an earlier mistake is not the decisive step. "
     "Answer only in JSON with three fields, in this order. "
-    "reasoning: go through the steps in order, note in a few words each step that looks wrong, "
-    "and say whether the failure follows from it; stop once you have found the decisive step. "
+    "reasoning: Think step by step go through the steps in order, note in a few words each step that looks wrong, and say whether the failure follows from it; "
+    "stop once you have found the decisive step. "
     "step: the decisive step's number. "
     "reason: one sentence saying what went wrong at that step."
 )
@@ -54,12 +62,6 @@ question = "Which step is the first one where the run went wrong? Give its step 
 Temperature = 0.7
 Seed = 41
 
-# Here we set the answer's JSON shape: the step number and one sentence saying why.
-# AnswerFormat = {
-#     "type": "object",
-#     "properties": {"step": {"type": "integer"}, "reason": {"type": "string"}},
-#     "required": ["step", "reason"],
-# }
 AnswerFormat = {
     "type": "object",
     "properties": {
@@ -79,6 +81,8 @@ def run_one_shot(run: data.Trajectory, run_number: int, log_folder: Path) -> int
     for call_number in range(1, DefaultNoOfCalls + 1):
         # Here we ask the model once; ask_for_one_step() tells us the step, or why this call gets no vote.
         call_seed = Seed + call_number #lets vary the seed for each call as we need some randomness
+        #call_seed = Seed #to test a permanent seed
+
         step, vote_line = ask_for_one_step(run, log, call_seed)
         votes.append(step)
         vote_lines.append(f"Call {call_number}: {vote_line}")
@@ -138,23 +142,41 @@ if __name__ == "__main__":
     sys.path.insert(0, str(PROJECT_FOLDER / "setup"))
     from start_ollama_server import start_ollama_server
     from stop_ollama_server import stop_ollama_server
-
-    # Here we read the pilot run from data/splits/pilot.json (run 36).
-    pilot_entry = json.loads((data.SPLITS_FOLDER / "pilot.json").read_text())[0]
-    pilot_run = data.read_who_and_when_file(data.WHO_AND_WHEN_FOLDER / pilot_entry["file"])
-
-    # Here we put today's logs in one folder per day: runs/one_shot/<date>/.
+    
+   
+    
     log_folder = PROJECT_FOLDER / "runs" / "one_shot" / time.strftime("%Y-%m-%d")
 
-    # Here we start the server only if it is not running, and remember whether we did,
-    # so at the end we stop only a server this file started and never one someone else is using.
     started_here = start_ollama_server()
+    print("start - " + str(datetime.now()))
 
-    # Here "try ... finally" makes sure the server we started is stopped even if something below fails.
+    # # For the pilot run and testing one example
+    # try:
+    #     pilot_entry = json.loads((data.SPLITS_FOLDER / "5_local.json").read_text())[0]
+    #     pilot_run = data.read_who_and_when_file(data.WHO_AND_WHEN_FOLDER / pilot_entry["file"])
+
+    #     answer = run_one_shot(pilot_run, pilot_entry["number"], log_folder)
+    #     print(f"Run {pilot_entry['number']}: answer = step {answer}, labelled Decisive step = {pilot_run.decisive_step}")
+    #     print(f"Log folder: {log_folder}")
+    # finally:
+    #     if started_here:
+    #         stop_ollama_server()
+
+
+
+    
+    split_file_name = "5_local.json"
     try:
-        answer = run_one_shot(pilot_run, pilot_entry["number"], log_folder)
-        print(f"Run {pilot_entry['number']}: answer = step {answer}, labelled Decisive step = {pilot_run.decisive_step}")
+        split_entries = json.loads((data.SPLITS_FOLDER / split_file_name).read_text())
+
+        # Here we run one-shot on every run in the split, one after the other; each run gets its own log.
+        for entry in split_entries:
+            run = data.read_who_and_when_file(data.WHO_AND_WHEN_FOLDER / entry["file"])
+            answer = run_one_shot(run, entry["number"], log_folder)
+            print(f"Run {entry['number']}: answer = step {answer}, labelled Decisive step = {run.decisive_step}")
         print(f"Log folder: {log_folder}")
     finally:
         if started_here:
             stop_ollama_server()
+
+    print("end - " + str(datetime.now()))

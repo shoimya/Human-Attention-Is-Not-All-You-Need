@@ -155,6 +155,39 @@ def make_six_different_runs() -> list[data.Trajectory]:
     return six_runs
 
 
+def test_create_splits_writes_that_many_different_random_runs_and_replaces_the_old_local_split(tmp_path):
+    """Asking for 3 runs writes local.json with 3 different runs, each described like the other splits,
+    replaces an old local.json, and leaves pilot.json and test.json alone.
+    tmp_path is a temporary folder from pytest, so the real data/splits/ is never touched."""
+    six_runs = make_six_different_runs()
+    # Here we put an old local split in the folder, to check it gets replaced.
+    (tmp_path / "local.json").write_text('[{"number": 1}, {"number": 2}, {"number": 3}, {"number": 4}]')
+
+    data.create_splits(3, six_runs, splits_folder=tmp_path)
+
+    local_split = json.loads((tmp_path / "local.json").read_text())
+    chosen_numbers = [entry["number"] for entry in local_split]
+    assert len(local_split) == 3
+    assert len(set(chosen_numbers)) == 3
+    # Here we check each entry points at the right run: run number n is the n-th run, counting from 1.
+    for entry in local_split:
+        run = six_runs[entry["number"] - 1]
+        assert entry == {"number": entry["number"], "id": run.id, "file": run.file_name}
+    assert not (tmp_path / "pilot.json").exists() and not (tmp_path / "test.json").exists()
+
+
+def test_create_splits_refuses_a_number_of_runs_that_cannot_be_picked(tmp_path, capsys):
+    """0 runs, or more runs than there are, gives a clear message and writes no file."""
+    six_runs = make_six_different_runs()
+
+    data.create_splits(0, six_runs, splits_folder=tmp_path)
+    data.create_splits(7, six_runs, splits_folder=tmp_path)
+
+    printed_text = capsys.readouterr().out
+    assert printed_text.count("Choose a number from 1 to 6") == 2
+    assert not (tmp_path / "local.json").exists()
+
+
 def test_human_review_split_writes_five_different_runs_without_their_labels(tmp_path):
     """Five files for five different runs; each shows the steps and an empty answer section, but never the label."""
     data.human_review_split(make_six_different_runs(), review_folder=tmp_path)
