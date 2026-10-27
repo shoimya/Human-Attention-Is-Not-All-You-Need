@@ -75,10 +75,39 @@ What we keep from the paper: the prover splits the claim and argues, the estimat
 
 ## 4. Single critique
 
-- **Who:** a proposer, a critic and a judge.
-- **What happens:** the proposer names a step. The critic checks that choice once.
-- **Answer:** the judge decides between them.
+- **Who:** a proposer and a critic (the same debater model, different instructions), and a judge (the smaller model).
+- **What happens:** the proposer names a step. The critic checks that choice once: it agrees, or it disagrees and names its own step. Nobody replies to the critic.
+- **Answer:** if the critic agrees, the proposer's step. If not, the judge picks the proposer's step or the critic's. Over several rounds, the step chosen most often.
 - **Why it is here:** Elasky et al. (2026) found that one critique gives most of the benefit of a full debate.
+
+### How we differ from Elasky et al.
+
+In Elasky et al. (arXiv 2605.27483), the critic only says whether the proposer's answer is right, and the judge rules it correct or incorrect. That gives no step when the judge says "incorrect", and we must always answer with a step. We change two things, and must report both:
+
+1. **The critic names a step when it disagrees,** with evidence from the run.
+2. **The judge chooses between the two steps** (PROPOSER or CRITIC) instead of ruling the proposer's step correct or incorrect.
+
+How it still differs from standard debate (section 2): there is only one exchange and no reply to the critic, the judge must choose one of the two named steps (it cannot name a third), and the judge is not asked at all when the critic agrees.
+
+### Rules
+
+1. **Input:** one failed run, meaning all its steps marked by `format_steps_as_text()`. The task question is already step 0. The pilot run (run 36) comes first; the script's main block runs `data/splits/pilot.json`.
+2. **Roles and models:** the proposer and the critic use the debater model (`qwen3.5:9b`); the judge uses the judge model (`qwen3.5:2b`). Each role keeps the same system prompt for the whole run.
+3. **Prompts, questions and formats:** variables at the top of the script: `ProposerPrompt`, `ProposerQuestion`, `ProposerFormat`, `CriticPrompt`, `CriticFormat`, `JudgePrompt`, `JudgeFormat`. The critic's and the judge's questions are built by `critic_question()` and `judge_question()`.
+4. **What each role sees:** every role reads the whole run. The critic also gets the proposer's step and reason, not its reasoning. The judge also gets the proposer's step and reason, and the critic's step and evidence, not the critic's reasoning.
+5. **Fixed answer formats** (fields in this order, so each role reasons before it answers):
+   - proposer: `reasoning`, `step`, `reason` (one sentence)
+   - critic: `reasoning`, `stance` (`AGREE` or `DISAGREE`), `step` (its own step if it disagrees, the claimed step if it agrees), `evidence` (two to four sentences)
+   - judge: `reasoning`, `winner` (`PROPOSER` or `CRITIC`), `reason` (one sentence), `confidence` (0 to 1)
+6. **One round:** the proposer answers, then the critic.
+   - The critic agrees: the round's step is the proposer's step, and the judge is not asked (2 calls).
+   - The critic disagrees: the judge picks, and the round's step is the winner's step (3 calls).
+7. **No retry:** a reply that isn't valid JSON, or a proposer's or disagreeing critic's step outside the run, ends the round with no step. The call still counts, and the log says why.
+8. **Number of rounds:** `NumberOfRounds = 3`, so 6 to 9 calls per run. Once the debate's average number of calls is known, set the rounds to match it. There is no early stop.
+9. **Temperature, seed and thinking:** `Temperature = 0.7`, base `Seed = 41` (the same as one-shot). Round *r* uses seed 41 + *r* for all its calls. Thinking is set once for every method by `THINKING_ON` in `runV2.py` (off for now).
+10. **Answer:** the step chosen most often over the rounds that gave a step. If there's a tie, the earliest step wins (the same vote as one-shot). If no round gave a step, there is no answer.
+11. **No hindsight:** the label and the annotators' reason never go into any prompt.
+12. **Log:** `runs/single_critique/<date>/run_<number>_<time>.md`. It shows each role's system prompt once, then every call; each call's heading shows its seed, which tells you the round. The result lists the calls used and one line per round: the chosen step, the proposer's and the critic's steps, and the judge's choice and confidence. The confidence is logged but not used.
 
 ## 5. Binary search
 
