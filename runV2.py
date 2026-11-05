@@ -63,12 +63,12 @@ def format_steps_as_text(steps: list[data.Step]) -> str:
     return "\n".join(marked_steps)
 
 
-def context_window_for(system_prompt: str, prompt: str) -> int:
+def context_window_for(system_prompt: str, prompt: str, room_for_reply: int = ROOM_FOR_REPLY_IN_TOKENS) -> int:
     """Return a context window just big enough for this call's prompt and its reply, in whole blocks of 8,192 tokens,
     and never bigger than the largest window this machine holds (settings.py)."""
     # Here we estimate the prompt's tokens from its characters, then add the safety margin and the room for the reply.
     estimated_prompt_tokens = (len(system_prompt) + len(prompt)) / CHARACTERS_PER_TOKEN
-    needed_tokens = estimated_prompt_tokens * TOKEN_ESTIMATE_SAFETY_FACTOR + ROOM_FOR_REPLY_IN_TOKENS
+    needed_tokens = estimated_prompt_tokens * TOKEN_ESTIMATE_SAFETY_FACTOR + room_for_reply
 
     # Here we round up to the next whole block, so the window is never smaller than what is needed.
     number_of_blocks = math.ceil(needed_tokens / CONTEXT_WINDOW_BLOCK_IN_TOKENS)
@@ -79,7 +79,8 @@ def context_window_for(system_prompt: str, prompt: str) -> int:
 
 
 def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.Step], question: str,
-                   answer_format: dict, temperature: float, seed: int, log: list) -> dict:
+                   answer_format: dict, temperature: float, seed: int, log: list,
+                   reply_limit: int = ROOM_FOR_REPLY_IN_TOKENS) -> dict:
     """Make one call: send a role's system prompt, the steps and a question to the live model and return its JSON answer.
 
     One call = one prompt sent to one model and its one reply. Every call is added to the log in full,
@@ -95,12 +96,13 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         temperature     how random replies are
         seed            fixes the randomness
         log             list collecting every call
+        reply_limit     longest reply in tokens; a method that leaves it out gets the shared limit
     """
     # Here we put the marked steps first and the question after them, as one prompt.
     prompt = format_steps_as_text(steps) + "\n" + question
 
     # Here we size this call's context window to its own prompt and reply.
-    context_window = context_window_for(system_prompt, prompt)
+    context_window = context_window_for(system_prompt, prompt, room_for_reply=reply_limit)
 
     # Here we build the message in Ollama's chat format: the role's rules as the system prompt, then the prompt.
     request_body = {
@@ -120,7 +122,7 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         # The temperature and seed are the method's own, so its randomness is fixed and can be repeated.
         "options": {
             "num_ctx": context_window,
-            "num_predict": ROOM_FOR_REPLY_IN_TOKENS,
+            "num_predict": reply_limit,
             "temperature": temperature,
             "seed": seed,
         },
@@ -159,6 +161,7 @@ def send_to_ollama(role: str, model: str, system_prompt: str, steps: list[data.S
         "temperature": temperature,
         "seed": seed,
         "context_window": context_window,
+        "reply_limit": reply_limit,
         # Here we mark a call whose prompt filled its context window: Ollama may have dropped part of it.
         "prompt_may_be_cut": tokens_read >= context_window - CONTEXT_WINDOW_SAFETY_MARGIN,
         # Here we mark a reply that Ollama stopped because it reached the reply limit ("length"), not because it ended.
@@ -237,7 +240,8 @@ def write_log(log: list, run_folder: Path, method_name: str, run_number: int,
                       "context window, so the model may not have seen all of it)", ""]
         # Here we warn loudly if the reply was stopped at the reply limit, because its end (often the JSON) is missing.
         if entry["reply_was_cut"]:
-            lines += [f"**WARNING: REPLY WAS CUT** (it reached the {ROOM_FOR_REPLY_IN_TOKENS}-token reply limit)", ""]
+            reply_limit = entry.get("reply_limit", ROOM_FOR_REPLY_IN_TOKENS)
+            lines += [f"**WARNING: REPLY WAS CUT** (it reached the {reply_limit}-token reply limit)", ""]
         # Here we show the system prompt again only if this role's system prompt changed during the question.
         if entry["system_prompt"] != system_prompt_by_role[entry["role"]]:
             lines += ["**System prompt changed to:**", "````text", entry["system_prompt"], "````", ""]

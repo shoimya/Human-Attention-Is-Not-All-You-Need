@@ -164,6 +164,56 @@ def test_each_call_asks_for_a_window_that_fits_its_prompt_and_logs_its_seed_temp
     assert log[0]["reply_was_cut"] is False
 
 
+def test_a_method_can_set_its_own_reply_limit_and_the_window_leaves_room_for_that_limit(monkeypatch):
+    """A call with reply_limit=2000 stops its reply at 2,000 tokens, sizes its window for 2,000, and logs the limit."""
+    received_requests = fake_ollama_server(monkeypatch, done_reason="stop")
+    log = []
+
+    runV2.send_to_ollama("reviewer", "qwen3.5:9b", "Find the mistake.", make_steps(), "Which step?",
+                         {"type": "object"}, temperature=0.7, seed=42, log=log, reply_limit=2000)
+
+    prompt = runV2.format_steps_as_text(make_steps()) + "\nWhich step?"
+    sent_options = received_requests[0]["options"]
+    assert sent_options["num_predict"] == 2000
+    assert sent_options["num_ctx"] == runV2.context_window_for("Find the mistake.", prompt, room_for_reply=2000)
+    assert log[0]["reply_limit"] == 2000
+
+
+def test_a_smaller_room_for_the_reply_can_give_a_smaller_window():
+    """A prompt that needs a second block with 4,096 tokens of reply room fits in one block with 2,000."""
+    prompt = "x" * 15000
+
+    assert runV2.context_window_for("", prompt) == 8192 * 2
+    assert runV2.context_window_for("", prompt, room_for_reply=2000) == 8192
+
+
+def test_a_call_without_a_reply_limit_keeps_the_shared_one(monkeypatch):
+    """The other methods do not pass a reply limit, so nothing changes for them, and the log says which limit applied."""
+    received_requests = fake_ollama_server(monkeypatch, done_reason="stop")
+    log = []
+
+    runV2.send_to_ollama("one-shot", "qwen3.5:9b", "Find the mistake.", make_steps(), "Which step?",
+                         {"type": "object"}, temperature=0.7, seed=43, log=log)
+
+    assert received_requests[0]["options"]["num_predict"] == runV2.ROOM_FOR_REPLY_IN_TOKENS
+    assert log[0]["reply_limit"] == runV2.ROOM_FOR_REPLY_IN_TOKENS
+
+
+def test_the_cut_reply_warning_names_the_calls_own_reply_limit(tmp_path):
+    """A call with its own limit says that limit in its warning; a call logged without one says the shared limit."""
+    own_limit_call = make_call("reviewer", "Find the mistake.", '{"step": 2')
+    own_limit_call["reply_limit"] = 2000
+    own_limit_call["reply_was_cut"] = True
+    shared_limit_call = make_call("one-shot", "Find the mistake.", '{"step": 2')
+    shared_limit_call["reply_was_cut"] = True
+
+    log_text = runV2.write_log([own_limit_call, shared_limit_call], tmp_path, "One-shot", 36, make_question(),
+                               predicted_step=None).read_text()
+
+    assert "it reached the 2000-token reply limit" in log_text
+    assert f"it reached the {runV2.ROOM_FOR_REPLY_IN_TOKENS}-token reply limit" in log_text
+
+
 def test_a_reply_that_hit_the_reply_limit_is_marked_as_cut(monkeypatch):
     """When Ollama stops a reply because it reached the reply limit, the log marks the reply as cut."""
     fake_ollama_server(monkeypatch, done_reason="length")
