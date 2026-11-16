@@ -30,7 +30,9 @@ that is the prover's choice. With q = 2 and ExtraRounds = 1, a run of 130 steps 
 Where we differ from the paper (report these):
     - The models are prompted, not trained, so the rewards change nothing. We compute and log them as the paper defines
       them, so a run can still show where the estimator was inconsistent.
-    - The parts are consecutive ranges of steps, so a decomposition is a list of cut points.
+    - The parts are consecutive ranges of steps, so a decomposition is a list of cut points. The prover is told each
+      cut's allowed range. If its cuts break the limit on both tries, they are moved to the nearest allowed values and
+      the log says so (CUTS MOVED), instead of failing the run.
     - The prover's turn includes a short argument for the estimator to read. In the paper the subclaims carry it.
     - Step 0 is the task, not an agent's action, so the opening claim covers steps 1 to the last step.
     - At the leaf the judge reads the step itself, so the prover gives no leaf answers (the paper's bits u). From one
@@ -258,12 +260,15 @@ def prover_turn(run: data.Trajectory, candidates: list[dict], rounds_left: int, 
 
     answer = ask_with_one_retry(
         "prover", ProverModel, ProverPrompt, run.steps, prover_question(candidates, rounds_left),
-        prover_format(candidates), lambda reply: problem_with_prover_answer(reply, candidates, rounds_left), log)
+        prover_format(candidates), lambda reply: problem_with_prover_answer(reply, candidates, rounds_left), log,
+        repair=lambda reply: prover_answer_with_cuts_moved(reply, candidates, rounds_left))
 
     claim = chosen_claim(answer, candidates)
     level = {**claim, "direction": answer["direction"], "chosen_by": chosen_by}
     if claim["first"] < claim["last"]:
         level["parts"] = parts_from_cuts(claim, answer["cuts"])
+        if "cuts_moved_from" in answer:
+            level["cuts_moved"] = (answer["cuts_moved_from"], answer["cuts"])
         level["argument"] = answer.get("argument", "")
         level["made_up_citations"] = made_up_citations(level["argument"], claim["first"], claim["last"])
     return level
@@ -350,6 +355,36 @@ def number_of_parts(claim: dict) -> int:
     return min(PartsPerSplit, steps_in(claim))
 
 
+def cut_ranges(claim: dict, rounds_left: int) -> list[tuple[int, int]]:
+    """Return the lowest and highest allowed value of each cut. Cut i must leave parts 1 to i small enough to hold at
+    most i * largest steps, and the parts after it enough room to hold the rest, with at least one step each.
+    With 2 parts the range is exact: any cut in it is allowed. With more parts, each part must also stay within the limit."""
+    first, last = claim["first"], claim["last"]
+    parts, largest = number_of_parts(claim), largest_part(rounds_left)
+    ranges = []
+    for cut_number in range(1, parts):
+        parts_after = parts - cut_number
+        lowest = max(first + cut_number - 1, last - parts_after * largest)
+        highest = min(last - parts_after, first + cut_number * largest - 1)
+        ranges.append((lowest, highest))
+    return ranges
+
+
+def nearest_allowed_cuts(claim: dict, cuts: list[int], rounds_left: int) -> list[int]:
+    """Move each cut, from the first to the last, to the nearest value that keeps the decomposition allowed.
+    A cut already allowed stays where it is."""
+    largest = largest_part(rounds_left)
+    moved = []
+    end_of_previous_part = claim["first"] - 1
+    for cut, (lowest, highest) in zip(cuts, cut_ranges(claim, rounds_left)):
+        # Here this part must hold at least one step and at most the largest part allowed.
+        lowest = max(lowest, end_of_previous_part + 1)
+        highest = min(highest, end_of_previous_part + largest)
+        moved.append(min(max(cut, lowest), highest))
+        end_of_previous_part = moved[-1]
+    return moved
+
+
 def parts_from_cuts(claim: dict, cuts: list[int]) -> list[dict]:
     """Turn cut points (the last step of each part except the last) into the parts' first and last steps."""
     firsts = [claim["first"]] + [cut + 1 for cut in cuts]
@@ -385,12 +420,25 @@ def claim_text(claim: dict) -> str:
     return f"steps {claim['first']} to {claim['last']} (estimator's probability of a decisive step: {claim['estimate']:.2f})"
 
 
+def allowed_cuts_text(claim: dict, rounds_left: int) -> str:
+    """Write the allowed range of each cut, for example "from 18 to 39" or "cut 1 from 3 to 3, cut 2 from 6 to 6"."""
+    ranges = cut_ranges(claim, rounds_left)
+    if len(ranges) == 1:
+        return f"from {ranges[0][0]} to {ranges[0][1]}"
+    return ", ".join(f"cut {number} from {lowest} to {highest}"
+                     for number, (lowest, highest) in enumerate(ranges, start=1))
+
+
 def cut_instruction(claim: dict, rounds_left: int) -> str:
-    """Write what a decomposition of this claim must look like."""
+    """Write what a decomposition of this claim must look like, with the exact allowed range of each cut."""
     parts = number_of_parts(claim)
-    return (f"cut steps {claim['first']} to {claim['last']} into {parts} parts by giving the last step of each part "
-            f"except the last ({parts - 1} number{'s' if parts > 2 else ''}, increasing). "
-            f"Each part must have at most {largest_part(rounds_left)} steps; within that, you choose where to cut.")
+    instruction = (f"cut steps {claim['first']} to {claim['last']} into {parts} parts by giving the last step of each "
+                   f"part except the last ({parts - 1} number{'s' if parts > 2 else ''}, increasing). "
+                   f"Each part may have at most {largest_part(rounds_left)} steps, so the cut must be "
+                   f"{allowed_cuts_text(claim, rounds_left)}")
+    if parts > 2:
+        instruction += f", and no part may have more than {largest_part(rounds_left)} steps"
+    return instruction + "; within that, you choose where to cut."
 
 
 def prover_question(candidates: list[dict], rounds_left: int) -> str:
@@ -459,21 +507,30 @@ def chosen_claim(answer: dict, candidates: list[dict]) -> dict:
 
 # ---------- Checks ----------
 def ask_with_one_retry(role: str, model: str, system_prompt: str, steps: list[data.Step], question: str,
-                       answer_format: dict, check, log: list) -> dict:
+                       answer_format: dict, check, log: list, repair=None) -> dict:
     """Ask one role, and ask once more if the reply is not valid JSON or check() finds a problem (rule 11).
-    Both calls count. Raise RunFailed if the second reply is unusable too."""
+    Both calls count. If the second reply is unusable too, repair() may turn it into a usable answer (it returns None
+    when it cannot); otherwise raise RunFailed."""
     problem = ""
+    answer = None
     for try_number in (1, 2):
         asked = question if try_number == 1 else f"{question}\n\nYour last reply was rejected because {problem}. Answer again."
         try:
             answer = runV2.send_to_ollama(role, model, system_prompt, steps, asked, answer_format,
                                           Temperature, Seed + len(log), log, reply_limit=ReplyLimitInTokens)
         except json.JSONDecodeError:
+            answer = None
             problem = "it was not valid JSON"
             continue
         problem = check(answer)
         if not problem:
             return answer
+
+    # Here the second reply was valid JSON but broke a rule; repair() fixes what can be fixed without asking again.
+    if repair is not None and answer is not None:
+        repaired = repair(answer)
+        if repaired is not None and not check(repaired):
+            return repaired
     raise RunFailed(f"the {role} gave an unusable reply twice; the second time {problem}")
 
 
@@ -492,7 +549,8 @@ def problem_with_joint_probabilities(answer: dict, cases: list[tuple[str, tuple[
         if not isinstance(value, (int, float)) or not 0 <= value <= 1:
             return f"{name} is {value}, not a number from 0 to 1"
     total = sum(answer[name] for name, _ in cases)
-    if abs(total - 1) > ProbabilitySumTolerance:
+    # Here the tiny extra allowance stops floating-point rounding rejecting a sum right at the edge, such as 0.95.
+    if abs(total - 1) > ProbabilitySumTolerance + 1e-9:
         return f"the probabilities add up to {total:.2f}, not 1"
     return None
 
@@ -509,6 +567,21 @@ def problem_with_prover_answer(answer: dict, candidates: list[dict], rounds_left
     return None
 
 
+def prover_answer_with_cuts_moved(answer: dict, candidates: list[dict], rounds_left: int) -> dict | None:
+    """Return the prover's answer with its cuts moved to the nearest allowed values, or None if the cuts cannot be
+    moved: the pick or direction is not allowed, or the cuts are not a list of the right number of step numbers."""
+    if len(candidates) > 1 and answer.get("next_part") not in range(1, len(candidates) + 1):
+        return None
+    if answer.get("direction") not in DirectionValues:
+        return None
+    claim = chosen_claim(answer, candidates)
+    cuts = answer.get("cuts")
+    if (steps_in(claim) < 2 or not isinstance(cuts, list) or len(cuts) != number_of_parts(claim) - 1
+            or not all(isinstance(cut, int) for cut in cuts)):
+        return None
+    return {**answer, "cuts": nearest_allowed_cuts(claim, cuts, rounds_left), "cuts_moved_from": cuts}
+
+
 def problem_with_cuts(cuts, claim: dict, rounds_left: int) -> str | None:
     """Return why a decomposition is not allowed, or None if it is: the right number of increasing cuts inside the
     claim's steps, and no part bigger than the rounds left can bring down to one step."""
@@ -522,7 +595,8 @@ def problem_with_cuts(cuts, claim: dict, rounds_left: int) -> str | None:
     for part in parts_from_cuts(claim, cuts):
         if steps_in(part) > limit:
             return (f"the part steps {part['first']} to {part['last']} has {steps_in(part)} steps, "
-                    f"more than the {limit} allowed with {rounds_left} rounds left")
+                    f"more than the {limit} allowed with {rounds_left} rounds left, so the cut must be "
+                    f"{allowed_cuts_text(claim, rounds_left)}")
     return None
 
 
@@ -553,6 +627,8 @@ def result_lines(run: data.Trajectory, depth: int, opening: dict | None, levels:
         if "parts" in level:
             parts_text = " | ".join(f"{part['first']}-{part['last']}" for part in level["parts"])
             line += f"; parts {parts_text}"
+        if "cuts_moved" in level:
+            line += f"; CUTS MOVED from {level['cuts_moved'][0]} to {level['cuts_moved'][1]} (prover broke the limit twice)"
         if "probabilities" in level:
             probabilities_text = ", ".join(f"{name} {value:.2f}" for name, value in level["probabilities"].items())
             # Here we check the paper's consistency: P(at least one part) should match the estimate for the claim.

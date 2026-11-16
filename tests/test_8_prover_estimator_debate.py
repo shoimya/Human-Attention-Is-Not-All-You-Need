@@ -201,6 +201,66 @@ def test_no_part_may_be_bigger_than_the_rounds_left_can_bring_down_to_one_step(c
         assert problem in found
 
 
+def test_the_prover_is_told_the_exact_range_of_its_cut():
+    """The pilot (run 36) failed here: steps 8 to 50 with 6 rounds left allow parts of at most 32 steps,
+    so the cut must be from 18 to 39, and the question now says so."""
+    claim = {"first": 8, "last": 50, "estimate": 0.0}
+    assert debate.cut_ranges(claim, rounds_left=6) == [(18, 39)]
+    assert "the cut must be from 18 to 39" in debate.prover_question([claim], rounds_left=6)
+    assert "so the cut must be from 18 to 39" in debate.problem_with_cuts([42], claim, rounds_left=6)
+
+
+@pytest.mark.parametrize("parts_per_split, claim, rounds_left, cuts, expected", [
+    (2, {"first": 8, "last": 50}, 6, [42], [39]),       # the pilot's cut, moved to the nearest allowed value
+    (2, {"first": 8, "last": 50}, 6, [25], [25]),       # an allowed cut stays where it is
+    (2, {"first": 1, "last": 9}, 4, [9], [8]),          # a cut past the claim's last step allowed
+    (3, {"first": 1, "last": 9}, 2, [5, 7], [3, 6]),    # q = 3, parts of at most 3 steps: only 3 | 6 works
+])
+def test_cuts_that_break_the_limit_move_to_the_nearest_allowed_values(monkeypatch, parts_per_split, claim,
+                                                                     rounds_left, cuts, expected):
+    monkeypatch.setattr(debate, "PartsPerSplit", parts_per_split)
+    moved = debate.nearest_allowed_cuts(claim, cuts, rounds_left)
+    assert moved == expected
+    assert debate.problem_with_cuts(moved, claim, rounds_left) is None
+
+
+def test_a_prover_that_breaks_the_limit_twice_has_its_cut_moved_and_the_run_goes_on(monkeypatch, tmp_path):
+    """Steps 1 to 16 with 4 rounds left allow only the cut 8. Two cuts at 3 are moved to 8, and the log says so."""
+    monkeypatch.setattr(debate, "ExtraRounds", 0)
+    calls = fake_models(monkeypatch, {
+        **opening_answers(),
+        "prover": [
+            prover_says("ABOUT_RIGHT", cuts=[3]),                   # not allowed
+            prover_says("ABOUT_RIGHT", cuts=[3]),                   # not allowed again: moved to 8 -> 1-8 | 9-16
+            prover_says("TOO_LOW", cuts=[4], next_part=1),          # picks 1-8 -> 1-4 | 5-8
+            prover_says("TOO_LOW", cuts=[2], next_part=1),          # picks 1-4 -> 1-2 | 3-4
+            prover_says("TOO_LOW", cuts=[3], next_part=2),          # picks 3-4 -> 3 | 4
+            prover_says("ABOUT_RIGHT", cuts=[], next_part=1),       # picks step 3
+        ],
+        "estimator": [two_parts(0, 1, 0, 0), two_parts(0, 1, 0, 0), two_parts(0, 0, 1, 0), two_parts(0, 1, 0, 0)],
+        "judge": [{"reasoning": "r", "verdict": "DECISIVE"}],
+    })
+
+    answer = debate.run_prover_estimator_debate(make_run(17), run_number=0, log_folder=tmp_path)
+
+    assert answer == 3
+    assert len(calls) == 13
+    assert "so the cut must be from 8 to 8" in calls[3]["question"]
+    assert "parts 1-8 | 9-16; CUTS MOVED from [3] to [8]" in log_text_of(tmp_path)
+
+
+def test_a_reply_that_is_not_json_twice_still_fails_the_run(monkeypatch, tmp_path):
+    """Only cuts are moved: two broken replies still end the run (rule 11)."""
+    script = a_prover_script()
+    script["prover"] = [None, None]
+    fake_models(monkeypatch, script)
+
+    answer = debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert answer is None
+    assert "RUN FAILED: the prover gave an unusable reply twice; the second time it was not valid JSON" in log_text_of(tmp_path)
+
+
 def test_the_depth_is_the_fewest_rounds_plus_the_extra_rounds(monkeypatch):
     monkeypatch.setattr(debate, "ExtraRounds", 1)
     assert debate.rounds_needed(1) == 0
@@ -333,6 +393,17 @@ def test_probabilities_close_to_1_are_rescaled_and_far_from_1_get_a_retry(monkey
     assert answer == 3
     assert "add up to 1.50" in [call for call in calls if call["role"] == "estimator"][1]["question"]
     assert "parts_1 0.71" in log_text_of(tmp_path)
+
+
+def test_a_sum_right_at_the_edge_of_the_tolerance_is_accepted(monkeypatch, tmp_path):
+    """The pilot's estimator gave 0, 0.95, 0, 0; floating-point rounding made 1 - 0.95 slightly above 0.05."""
+    script = a_prover_script()
+    script["estimator"][0] = two_parts(0.0, 0.95, 0.0, 0.0)
+    calls = fake_models(monkeypatch, script)
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert len(calls) == 10     # no retry
 
 
 def test_two_broken_replies_in_a_row_fail_the_run(monkeypatch, tmp_path):
