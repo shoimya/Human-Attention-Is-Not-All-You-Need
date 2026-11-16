@@ -12,6 +12,8 @@ run.py                    the older version of the model calls (ticket 03), kept
 methods/
   one_shot.py             one model names the decisive step several times; the step named most often wins
   single_critique.py      a proposer names a step, a critic checks it, a judge picks if they disagree
+  prover_estimator_debate.py  the paper's protocol: the prover decomposes the run and picks parts, the estimator
+                          gives probabilities, the judge checks the last step left (main method, ticket 04)
 Notebooks/
   One-Shot-Kaggle.ipynb          one-shot on all 58 runs, on Kaggle
   Single-Critique-Kaggle.ipynb   single critique on all 58 runs, on Kaggle
