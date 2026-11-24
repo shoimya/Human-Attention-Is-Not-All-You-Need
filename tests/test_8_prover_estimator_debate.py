@@ -1,5 +1,6 @@
 """Tests for methods/prover_estimator_debate.py: the protocol's order, the prover's decompositions and the depth limit,
-who picks the next part, the retries, the judge's view, the paper's rewards and the log.
+who picks the next part, the back-ups after the judge says no, what each role remembers, the retries, the judge's view,
+the paper's rewards and the log.
 
 Press play on this file to run all its tests. The models are replaced by scripted answers, so no server is needed
 and nothing is written to runs/.
@@ -302,6 +303,7 @@ def test_the_combinations_are_named_from_none_to_all_parts():
 def test_the_first_error_rule_overrides_the_prover(monkeypatch, tmp_path):
     """With the switch on, the earliest part the estimator gives more than 0.5 is kept, and the prover never picks."""
     monkeypatch.setattr(debate, "NextPartChosenBy", "first_error")
+    monkeypatch.setattr(debate, "BackUpsAfterJudgeSaysNo", 0)
     calls = fake_models(monkeypatch, {
         **opening_answers(),
         "prover": [
@@ -331,6 +333,136 @@ def test_the_first_error_rule_falls_back_to_the_most_likely_part():
     assert debate.first_error_pick(parts)["first"] == 3
     parts[2]["estimate"] = 0.6
     assert debate.first_error_pick(parts)["first"] == 5
+
+
+# ---------- Back-ups after the judge says no (decision E) ----------
+def judge_says(*verdicts: str) -> list[dict]:
+    return [{"reasoning": "r", "verdict": verdict} for verdict in verdicts]
+
+
+def test_a_rejected_step_sends_the_debate_to_the_other_part_of_its_level(monkeypatch, tmp_path):
+    """Step 3 is rejected, so the debate goes back to steps 3-4, where only step 4 is left, and the judge accepts it."""
+    script = a_prover_script()
+    script["prover"].append(prover_says("TOO_LOW"))                 # the only part left: step 4
+    script["judge"] = judge_says("NOT_DECISIVE", "DECISIVE")
+    calls = fake_models(monkeypatch, script)
+
+    answer = debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert answer == 4
+    assert [call["role"] for call in calls][-4:] == ["prover", "judge", "prover", "judge"]
+    assert [step.index for step in calls[-1]["steps"]] == [0, 4]
+    log_text = log_text_of(tmp_path)
+    assert "Level 5: steps 4 to 4 (estimate 0.00, chosen by only claim after a back-up)" in log_text
+    assert "Judge on step 3: NOT_DECISIVE" in log_text and "Judge on step 4: DECISIVE" in log_text
+    assert "BACK-UPS: 1" in log_text
+    assert "Answer chosen: step 4 (the first step the judge called DECISIVE)" in log_text
+
+
+def test_when_a_level_is_used_up_the_debate_goes_up_one_more(monkeypatch, tmp_path):
+    """Steps 3 and 4 are both rejected, so steps 3-4 are used up and the debate goes back to steps 1-2."""
+    script = a_prover_script()
+    script["prover"] += [
+        prover_says("TOO_LOW"),                                     # back-up 1: step 4
+        prover_says("TOO_LOW", cuts=[1]),                           # back-up 2: steps 1-2 -> 1 | 2
+        prover_says("TOO_LOW", cuts=[], next_part=2),               # picks step 2
+    ]
+    script["estimator"].append(two_parts(0.0, 0.0, 1.0, 0.0))
+    script["judge"] = judge_says("NOT_DECISIVE", "NOT_DECISIVE", "DECISIVE")
+    calls = fake_models(monkeypatch, script)
+
+    answer = debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert answer == 2
+    prover_questions = [call["question"] for call in calls if call["role"] == "prover"]
+    assert "said it is NOT decisive, so the debate went back to steps 1 to 4" in prover_questions[-2]
+    assert "cut steps 1 to 2 into 2 parts" in prover_questions[-2]
+    assert "BACK-UPS: 2" in log_text_of(tmp_path)
+
+
+def test_when_the_judge_accepts_no_step_the_first_step_reached_is_the_answer(monkeypatch, tmp_path):
+    monkeypatch.setattr(debate, "BackUpsAfterJudgeSaysNo", 1)
+    script = a_prover_script()
+    script["prover"].append(prover_says("TOO_LOW"))
+    script["judge"] = judge_says("NOT_DECISIVE", "NOT_DECISIVE")
+    calls = fake_models(monkeypatch, script)
+
+    answer = debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert answer == 3
+    assert len(calls) == 12      # the second rejection uses up the one back-up allowed
+    assert "Answer chosen: step 3 (the judge called no step DECISIVE, so the first step reached)" in log_text_of(tmp_path)
+
+
+def test_with_back_ups_switched_off_the_answer_stands_whatever_the_judge_says(monkeypatch, tmp_path):
+    monkeypatch.setattr(debate, "BackUpsAfterJudgeSaysNo", 0)
+    script = a_prover_script()
+    script["judge"] = judge_says("NOT_DECISIVE")
+    calls = fake_models(monkeypatch, script)
+
+    assert debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path) == 3
+    assert len(calls) == 10
+
+
+# ---------- What each role remembers ----------
+def test_the_prover_is_shown_its_own_last_turns(monkeypatch, tmp_path):
+    """The prover's second turn quotes its first argument and the estimator's numbers for its parts."""
+    script = a_prover_script()
+    script["prover"][0] = prover_says("ABOUT_RIGHT", cuts=[4], argument="argument-marker")
+    calls = fake_models(monkeypatch, script)
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    prover_questions = [call["question"] for call in calls if call["role"] == "prover"]
+    assert "Your earlier turns" not in prover_questions[0]
+    assert ("Steps 1 to 9 (estimator: 0.90): you said ABOUT_RIGHT, cut them into 1-4 | 5-9 and argued: "
+            "\"argument-marker\". The estimator then gave steps 1-4 0.80, steps 5-9 0.20.") in prover_questions[1]
+    # Here the fourth turn has three earlier turns, all within the 3 shown.
+    assert "argument-marker" in prover_questions[3]
+    assert "Stay consistent with them" in calls[2]["system_prompt"]
+
+
+def test_only_the_last_few_turns_are_shown(monkeypatch, tmp_path):
+    monkeypatch.setattr(debate, "EarlierTurnsShownToProver", 2)
+    script = a_prover_script()
+    script["prover"][0] = prover_says("ABOUT_RIGHT", cuts=[4], argument="argument-marker")
+    calls = fake_models(monkeypatch, script)
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    prover_questions = [call["question"] for call in calls if call["role"] == "prover"]
+    assert "argument-marker" in prover_questions[2]
+    assert "argument-marker" not in prover_questions[3]
+
+
+def test_the_prover_can_be_shown_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(debate, "EarlierTurnsShownToProver", 0)
+    calls = fake_models(monkeypatch, a_prover_script())
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    assert all("Your earlier turns" not in call["question"] for call in calls)
+
+
+def test_the_estimator_is_reminded_of_its_earlier_probability(monkeypatch, tmp_path):
+    """The paper's consistency: P(at least one part) should equal the estimate the claim had before it was split."""
+    calls = fake_models(monkeypatch, a_prover_script())
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    estimator_questions = [call["question"] for call in calls if call["role"] == "estimator"]
+    assert "You gave it probability 0.90 before" in estimator_questions[0]
+    assert "You gave it probability 0.80 before" in estimator_questions[1]
+
+
+def test_inefficiency_alone_is_not_decisive_for_any_role(monkeypatch, tmp_path):
+    calls = fake_models(monkeypatch, a_prover_script())
+
+    debate.run_prover_estimator_debate(make_run(), run_number=0, log_folder=tmp_path)
+
+    for call in calls:
+        assert "Being slow or inefficient" in call["system_prompt"]
+        assert "never name a person, title, file or value that does not appear in the run" in call["system_prompt"]
 
 
 # ---------- What each role sees ----------
@@ -467,7 +599,9 @@ def test_the_log_shows_every_level_the_judge_and_the_rewards(monkeypatch, tmp_pa
     assert "parts 1-4 | 5-9; estimator none 0.10, parts_1 0.70, parts_2 0.10, parts_1_2 0.10" in log_text
     assert "Level 4: steps 3 to 3" in log_text
     assert "Judge on step 3: DECISIVE" in log_text
-    assert "Prover's rewards (paper):" in log_text
+    assert "Prover's rewards (paper, last way down):" in log_text
+    assert "Answer chosen: step 3 (the first step the judge called DECISIVE)" in log_text
+    assert "BACK-UPS" not in log_text
 
 
 if __name__ == "__main__":
