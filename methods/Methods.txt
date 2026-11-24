@@ -1,0 +1,124 @@
+METHODS AT A GLANCE
+Which models each method uses, its temperature and seed, and how big its context window gets.
+Checked against the code on branch SC.V1 on 24 November 2026.
+
+
+THE SHORT VERSION
+-----------------
+Every method runs on Ollama 0.35.1 with thinking switched off, and every method uses temperature 0.7.
+
+The first round of runs uses qwen3.5:9b for the main roles and qwen3.5:2b for judges.
+The second round swaps in qwen3.8:27b. The qwen3.8 notebooks change the model names and nothing in the method.
+
+Seeds are not the same everywhere. Four methods start from 41 or 42. Standard debate starts from 50.
+
+Two methods can't fit the whole run in their context window on some runs, so the model never sees all of it.
+Standard debate is the worst case, with four runs affected. Prover-estimator debate misses one.
+The details are at the bottom.
+
+
+THE MODELS
+----------
+Model name               Size   Quantization   File ID
+qwen3.5:9b               9B     Q4_K_M         56671c2ab938
+qwen3.5:2b               2B     Q8_0           0689d44085e0
+qwen3.5:9b-q4_K_M        9B     Q4_K_M         56671c2ab938   same file as qwen3.5:9b, under a fixed tag
+qwen3.8:27b-q4_K_M       27B    Q4_K_M         25b843619e94
+
+The project's two defaults live in settings.py. DEBATER_MODEL is qwen3.5:9b and JUDGE_MODEL is qwen3.5:2b.
+Each notebook checks the file ID after downloading a model and warns if it got a different file.
+
+
+HOW BIG THE CONTEXT WINDOW GETS
+-------------------------------
+Most methods share one rule, in runV2.py. Before each call it estimates the prompt's size, adds 25% to be safe,
+adds room for the reply, and rounds up to a multiple of 8,192 tokens. The window never goes above 65,536 on the
+Mac or 131,072 on Kaggle. The longest run is about 80,000 tokens, so it fits on Kaggle.
+
+The estimate assumes 3.6 characters per token. That's fine for most runs. Run 14 is full of numbers and packs about
+1.95 characters into each token, so at 3.6 its window comes out too small. Some notebooks therefore set the estimate
+to 2.5, which fixes run 14 and costs a little extra memory on about ten other runs.
+
+Standard debate doesn't use the shared rule. It sizes its own windows at 3.0 characters per token and caps them at
+49,152 tokens, on the Mac and on Kaggle alike. That cap is too low for the longest runs.
+
+
+EACH METHOD
+-----------
+One-shot, one_shot.py
+    Model        qwen3.5:9b, from settings
+    Temperature  0.7
+    Seed         call 1 uses 42, call 2 uses 43, and so on up to 51
+    Calls        up to 10, and it stops after 5 if all 5 named the same step
+    Reply room   4,096 tokens
+    Window       shared rule
+
+Single critique, single_critique.py
+    Models       proposer and critic qwen3.5:9b, judge qwen3.5:2b, all from settings
+    Temperature  0.7
+    Seed         every call in round 1 uses 42, round 2 uses 43, round 3 uses 44
+    Calls        3 rounds of 2 or 3 calls; the judge only speaks when the critic disagrees
+    Reply room   4,096 tokens
+    Window       shared rule
+
+Standard debate, standard_debate.py
+    Models       debaters qwen3.5:9b and judge qwen3.5:2b, written into the file rather than read from settings,
+                 so a notebook that changes the settings can't change this method's models
+    Temperature  0.7
+    Seed         50 for the first call, then one higher for each call after it
+    Calls        4 rounds of debater A and debater B, then the judge, with up to 2 retries per turn
+    Reply room   1,500 tokens
+    Window       its own rule, capped at 49,152 tokens
+
+Prover-estimator debate, prover_estimator_debate.py
+    Models       prover and estimator qwen3.5:9b, judge qwen3.5:2b, all from settings
+    Temperature  0.7
+    Seed         41 for the first call, then one higher for each call after it; the paper's random draws use a
+                 separate generator, also seeded with 41
+    Calls        2 to open, 2 per round, 1 last prover turn and 1 judge call, with at most one retry per call
+    Reply room   2,000 tokens
+    Window       shared rule; the prover and estimator read the whole run, the judge reads the task and one step
+
+Binary search, binarysearch.py
+    Model        qwen3.5:9b, from settings
+    Temperature  0.7
+    Seed         42 for every call
+    Calls        one per round, so about log2 of the number of steps: 3 for a 5-step run, 8 for 130 steps
+    Reply room   1,024 tokens, the Who&When authors' own limit
+    Window       shared rule; each call only reads the steps still in play, so later calls are small
+
+
+EACH NOTEBOOK
+-------------
+All notebooks run the test split, all 58 runs, and keep the method's own temperature and seed.
+The qwen3.5 runs log to runs/<method>/<date>/ and the qwen3.8 runs to runs/<method>_qwen38/<date>/.
+
+Notebook                          Models                                     Size estimate  Stop time  Memory check  Download retries
+One-Shot-Kaggle                   qwen3.5:9b                                 3.6            no         no            no
+One-Shot-Qwen38-Kaggle            qwen3.8:27b                                2.5            10.5 h     yes           no
+Single-Critique-Kaggle            qwen3.5:9b, judge qwen3.5:2b               3.6            no         no            no
+Single-Critique-Qwen38-Kaggle     qwen3.8:27b, judge qwen3.5:9b              2.5            10.5 h     yes           yes
+Standard-Debate-Kaggle            qwen3.5:9b, judge qwen3.5:2b               own rule       no         no            no
+Prover-Estimator-Debate-Kaggle    qwen3.5:9b, judge qwen3.5:2b               3.6            10.5 h     no            no
+Binary-Search-Kaggle              qwen3.5:9b                                 2.5            no         no            yes
+Binary-Search-Qwen38-Kaggle       qwen3.8:27b                                2.5            10.5 h     yes           yes
+
+The stop time keeps a notebook from starting new runs late in Kaggle's 12-hour session, so it can still save its logs.
+The memory check loads the 27B model before the first run and stops the notebook if the model doesn't fit on the GPU.
+Download retries try the Who&When download again if Kaggle's network drops for a moment.
+
+
+WHERE THE WINDOW IS TOO SMALL
+-----------------------------
+These numbers use real token counts from the qwen3.8 one-shot logs.
+
+Standard debate cuts off runs 14, 30, 51 and 56. Run 14 is 31,201 tokens against a 24,576-token window. Runs 30, 51
+and 56 are 79,995, 61,347 and 57,589 tokens, all above the 49,152 cap. Run 8 is 46,601 tokens before any debate text
+is added, so it probably goes over too. On these runs the debaters and the judge argue about a run they can't fully see,
+which may explain why standard debate found nothing on runs of 80 steps or more.
+
+Prover-estimator debate cuts off run 14. Its 31,201 tokens don't fit the 24,576-token window the 3.6 estimate gives.
+Setting the estimate to 2.5 in its notebook would fix it.
+
+One-shot and single critique fit every run. On run 14 their reply room drops to about 1,567 tokens, which cut some long
+replies in the qwen3.8 one-shot run. The qwen3.8 notebooks use 2.5, which gives every reply its full room.
