@@ -21,13 +21,11 @@ How one run goes:
              the estimator's probability for that part (the marginal: every combination that includes it).
     Leaf     When the chosen part has one step, the judge sees only the task (Step 0) and that step, never the debate,
              and says whether it is a decisive step (the paper's human oracle).
-    Back-up  If the judge says NOT_DECISIVE, the debate goes back up to the nearest level that still has a part nobody
-             has gone into, and the prover picks among those parts (informatics.md, decision E). This happens at most
-             BackUpsAfterJudgeSaysNo times.
-Answer: the first step the judge calls DECISIVE. If it accepts none, the first step the debate reached.
+Answer: the step the debate reached, whatever the judge says (informatics.md, decision E: "still answer that step").
+The judge's verdict is logged and decides the last round's reward, as the paper's oracle does.
 
 What each role remembers: every call is fresh, so the prover is shown its own last EarlierTurnsShownToProver turns
-(its cuts, its arguments, the estimator's numbers for its parts, and any step the judge rejected) and is asked to stay
+(its cuts, its arguments and the estimator's numbers for its parts) and is asked to stay
 consistent with them unless the run shows they were wrong. The estimator is shown its own earlier probability for the
 claim it now splits, and asked to keep P(at least one part) equal to it unless it says what changed.
 
@@ -45,15 +43,12 @@ Where we differ from the paper (report these):
     - Step 0 is the task, not an agent's action, so the opening claim covers steps 1 to the last step.
     - At the leaf the judge reads the step itself, so the prover gives no leaf answers (the paper's bits u). From one
       step and the task, the judge can see whether the step was wrong, but not whether the run would have recovered.
-    - The back-up after a NOT_DECISIVE verdict is ours (decision E); the paper's oracle answer simply ends the game.
-      Each back-up costs at least one more prover call and one more judge call, so report the calls per run.
     - The prover is shown the debate so far; in the paper the prover is one fixed strategy, which a sampled, untrained
       model is not unless it can see what it said before.
     - NextPartChosenBy = "first_error" swaps the prover's choice for informatics.md's first-error rule (rule 7): the
       earliest part the estimator gives more than 0.5, or else the part it gives the most.
 
-Calls per run: 2 for the opening, 2 per round, 1 last prover turn and 1 judge call, plus at most one retry per call,
-plus the calls of any back-up.
+Calls per run: 2 for the opening, 2 per round, 1 last prover turn and 1 judge call, plus at most one retry per call.
 
 How to use it:
     Press play on this file. It runs the debate on the pilot run (data/splits/pilot.json, run 36) with the live models
@@ -109,7 +104,7 @@ ProverPrompt = (
     "claim's steps. "
     "When you are asked to pick a part, pick the one where the estimator's probability is furthest from the truth. "
     "You may be shown your own earlier turns in this debate. Stay consistent with them unless the run shows they were "
-    "wrong; if you change your mind, say why in your argument. A step the judge has rejected is not decisive. "
+    "wrong; if you change your mind, say why in your argument. "
     + LengthRule +
     "Answer only in JSON, with the fields in the order the format gives them."
 )
@@ -199,10 +194,6 @@ ExtraRounds = 1
 # Here we choose who picks the part to go into: "prover" (the paper) or "first_error" (informatics.md, rule 7).
 NextPartChosenBy = "prover"
 
-# Here we choose how many times the debate may go back up after the judge says NOT_DECISIVE (decision E); 0 switches
-# it off, so the first step reached is the answer whatever the judge says.
-BackUpsAfterJudgeSaysNo = 2
-
 # Here we choose how many of its own earlier turns the prover is shown (0 shows none, as in the first version).
 EarlierTurnsShownToProver = 3
 
@@ -231,10 +222,9 @@ def run_prover_estimator_debate(run: data.Trajectory, run_number: int, log_folde
     log = []
     draws = random.Random(Seed)     # the paper's trusted randomness
     opening = None
-    path = []                       # the levels from the whole run down to the current claim (the paper's game)
-    levels = []                     # every level in the order the debate reached it, back-ups included, for the log
+    levels = []                     # the levels from the whole run down to one step (the paper's game)
     history = []                    # what the prover is shown of its own earlier turns
-    verdicts = []                   # (step, verdict) for every step the judge checked, in order
+    verdict = None                  # the judge's verdict on the step the debate reached
     failure = ""
     depth = rounds_needed(len(run.steps) - 1) + ExtraRounds
 
@@ -243,68 +233,28 @@ def run_prover_estimator_debate(run: data.Trajectory, run_number: int, log_folde
             raise RunFailed("the run has no step after the task")
         opening = run_opening(run, draws, log)
         candidates = [{"first": 1, "last": len(run.steps) - 1, "estimate": opening["probability"]}]
-        after_back_up = False
 
         while True:
             # Here the prover picks a part if there are several, gives its direction and, if it can, decomposes the claim.
-            level = prover_turn(run, candidates, depth - len(path), history, log, after_back_up)
-            after_back_up = False
-            if path:
-                path[-1]["gone_into"].append((level["first"], level["last"]))
-            path.append(level)
+            level = prover_turn(run, candidates, depth - len(levels), history, log)
             levels.append(level)
             history.append(history_line(level))
-
-            if level["first"] < level["last"]:
-                candidates = estimator_turn(run, level, draws, log)
-                history[-1] += estimator_history_text(candidates)
-                continue
-
-            # Here we reached one step: the judge checks it, and a NOT_DECISIVE verdict may send the debate back up.
-            verdict = ask_judge(run, level["first"], log)
-            verdicts.append((level["first"], verdict))
-            level["verdict"] = verdict
-            if verdict == "DECISIVE" or len(verdicts) > BackUpsAfterJudgeSaysNo:
+            if level["first"] == level["last"]:
                 break
-            candidates = back_up(path)
-            if candidates is None:
-                break
-            after_back_up = True
-            history.append(f"The judge checked Step {level['first']} on its own and said it is NOT decisive, so the "
-                           f"debate went back to steps {path[-1]['first']} to {path[-1]['last']}.")
+            candidates = estimator_turn(run, level, draws, log)
+            history[-1] += estimator_history_text(candidates)
+
+        # Here we reached one step: the judge checks it. Its verdict decides the last reward, not the answer.
+        verdict = ask_judge(run, level["first"], log)
+        level["verdict"] = verdict
     except RunFailed as error:
         failure = str(error)
 
-    answer = chosen_answer(verdicts) if not failure else None
-    # Here the paper's rewards are for the last way down, the game as the paper plays it, ending at the last verdict.
-    rewards = paper_rewards(opening, path, verdicts[-1][1]) if opening and verdicts and path and not failure else None
-    extra_result_lines = result_lines(run, depth, opening, levels, verdicts, answer, rewards, failure)
+    answer = levels[-1]["first"] if verdict and not failure else None
+    rewards = paper_rewards(opening, levels, verdict) if opening and verdict and not failure else None
+    extra_result_lines = result_lines(run, depth, opening, levels, rewards, failure)
     runV2.write_log(log, log_folder, "Prover-estimator debate", run_number, run, answer, extra_result_lines)
     return answer
-
-
-def chosen_answer(verdicts: list[tuple[int, str]]) -> int | None:
-    """Return the first step the judge called DECISIVE, or, if it called none decisive, the first step it checked."""
-    if not verdicts:
-        return None
-    for step, verdict in verdicts:
-        if verdict == "DECISIVE":
-            return step
-    return verdicts[0][0]
-
-
-def back_up(path: list[dict]) -> list[dict] | None:
-    """Drop the rejected step and go up to the nearest level that still has a part nobody has gone into.
-    Return those parts (with their estimates) for the prover to pick from, or None if every part has been tried.
-    The levels above stay on the path, so the rounds left are the same as when that level was first split."""
-    path.pop()
-    while path:
-        remaining = [part for part in path[-1]["candidates"]
-                     if (part["first"], part["last"]) not in path[-1]["gone_into"]]
-        if remaining:
-            return remaining
-        path.pop()
-    return None
 
 
 def run_opening(run: data.Trajectory, draws: random.Random, log: list) -> dict:
@@ -324,8 +274,7 @@ def run_opening(run: data.Trajectory, draws: random.Random, log: list) -> dict:
             "drawn_bit": 1 if draws.random() < probability else 0}
 
 
-def prover_turn(run: data.Trajectory, candidates: list[dict], rounds_left: int, history: list[str], log: list,
-                after_back_up: bool = False) -> dict:
+def prover_turn(run: data.Trajectory, candidates: list[dict], rounds_left: int, history: list[str], log: list) -> dict:
     """One prover turn: pick a part (if there are several), give a direction on its probability, and decompose it if
     it has more than one step. Return the claim it spoke about, as a level: its steps, estimate, direction and parts."""
     # Here the first-error rule, if switched on, picks the part before the prover speaks.
@@ -333,8 +282,6 @@ def prover_turn(run: data.Trajectory, candidates: list[dict], rounds_left: int, 
     if len(candidates) > 1 and NextPartChosenBy == "first_error":
         candidates = [first_error_pick(candidates)]
         chosen_by = "first-error rule"
-    if after_back_up:
-        chosen_by += " after a back-up"
 
     question = prover_question(candidates, rounds_left)
     if history and EarlierTurnsShownToProver > 0:
@@ -346,7 +293,7 @@ def prover_turn(run: data.Trajectory, candidates: list[dict], rounds_left: int, 
         repair=lambda reply: prover_answer_with_cuts_moved(reply, candidates, rounds_left))
 
     claim = chosen_claim(answer, candidates)
-    level = {**claim, "direction": answer["direction"], "chosen_by": chosen_by, "gone_into": []}
+    level = {**claim, "direction": answer["direction"], "chosen_by": chosen_by}
     if claim["first"] < claim["last"]:
         level["parts"] = parts_from_cuts(claim, answer["cuts"])
         if "cuts_moved_from" in answer:
@@ -374,9 +321,8 @@ def estimator_turn(run: data.Trajectory, level: dict, draws: random.Random, log:
     level["outcome"] = max(drawn_bits)
 
     # Here each part's estimate is its marginal: the probabilities of every combination that includes it.
-    level["candidates"] = [{**part, "estimate": sum(probabilities[name] for name, bits in cases if bits[number])}
-                           for number, part in enumerate(level["parts"])]
-    return level["candidates"]
+    return [{**part, "estimate": sum(probabilities[name] for name, bits in cases if bits[number])}
+            for number, part in enumerate(level["parts"])]
 
 
 def ask_judge(run: data.Trajectory, step_number: int, log: list) -> str:
@@ -714,12 +660,11 @@ def made_up_citations(argument: str, first: int, last: int) -> list[int]:
 
 # ---------- The log ----------
 def result_lines(run: data.Trajectory, depth: int, opening: dict | None, levels: list[dict],
-                 verdicts: list[tuple[int, str]], answer: int | None, rewards: dict | None, failure: str) -> list[str]:
+                 rewards: dict | None, failure: str) -> list[str]:
     """Write the debate's own lines for the log's result: the opening, one line per level, the judge and the rewards."""
     lines = [f"Next part chosen by: {NextPartChosenBy}",
              f"Parts per split q: {PartsPerSplit}, depth allowed: {depth} rounds, reward ratio r: {RewardRatio}",
-             f"Back-ups allowed after NOT_DECISIVE: {BackUpsAfterJudgeSaysNo}, "
-             f"earlier turns shown to the prover: {EarlierTurnsShownToProver}"]
+             f"Earlier turns shown to the prover: {EarlierTurnsShownToProver}"]
     if failure:
         lines.append(f"RUN FAILED: {failure}")
     if opening:
@@ -749,16 +694,9 @@ def result_lines(run: data.Trajectory, depth: int, opening: dict | None, levels:
         if "verdict" in level:
             lines.append(f"Judge on step {level['first']}: {level['verdict']}")
 
-    if len(verdicts) > 1:
-        lines.append(f"BACK-UPS: {len(verdicts) - 1}")
-    if answer is not None and verdicts:
-        accepted = any(verdict == "DECISIVE" for _, verdict in verdicts)
-        lines.append(f"Answer chosen: step {answer} "
-                     + ("(the first step the judge called DECISIVE)" if accepted
-                        else "(the judge called no step DECISIVE, so the first step reached)"))
     if rewards:
         round_text = ", ".join(f"{reward:+.3f}" for reward in rewards["rounds"])
-        lines.append(f"Prover's rewards (paper, last way down): opening {rewards['opening']:+.3f}, levels {round_text}, "
+        lines.append(f"Prover's rewards (paper): opening {rewards['opening']:+.3f}, levels {round_text}, "
                      f"total {rewards['total']:+.3f}")
     return lines
 
